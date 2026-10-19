@@ -1,0 +1,108 @@
+import os
+import re
+from typing import List, Dict
+
+from rank_bm25 import BM25Okapi
+
+from config import DATA_DIR
+
+TOKEN_RE = re.compile(r"[а-яёa-z0-9]+", re.IGNORECASE)
+HEAD_RE = re.compile(r"(?m)^##\s+(.+?)\s*$")
+
+
+def tokenize(text: str) -> List[str]:
+    return TOKEN_RE.findall(text.lower())
+
+
+def _read(path: str) -> str:
+    with open(path, encoding="utf-8", errors="ignore") as f:
+        return f.read()
+
+
+def _chunk(text: str, size: int = 1100, overlap: int = 150) -> List[str]:
+    text = re.sub(r"\r\n?", "\n", text)
+    parts = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+    chunks, buf = [], ""
+    for p in parts:
+        if len(buf) + len(p) + 2 <= size:
+            buf = (buf + "\n\n" + p).strip()
+        else:
+            if buf:
+                chunks.append(buf)
+            if len(p) <= size:
+                buf = p
+            else:
+                for i in range(0, len(p), size - overlap):
+                    chunks.append(p[i:i + size])
+                buf = ""
+    if buf:
+        chunks.append(buf)
+    return chunks
+
+
+class KnowledgeBase:
+    def __init__(self, data_dir: str = DATA_DIR):
+        self.data_dir = data_dir
+        self.docs: List[Dict[str, str]] = []
+        self.bm25 = None
+        self.questions: List[Dict[str, str]] = []
+        self._load_docs()
+        self._build_index()
+        self._load_questions()
+
+    def _load_docs(self):
+        if not os.path.isdir(self.data_dir):
+            print(f"[KB] data dir not found: {self.data_dir}")
+            return
+        for root, _, files in os.walk(self.data_dir):
+            for name in files:
+                if not name.lower().endswith((".txt", ".md")):
+                    continue
+                path = os.path.join(root, name)
+                rel = os.path.relpath(path, self.data_dir)
+                text = _read(path)
+                for ch in _chunk(text):
+                    self.docs.append({"source": rel, "text": ch})
+        print(f"[KB] chunks: {len(self.docs)}")
+
+    def _build_index(self):
+        if not self.docs:
+            return
+        corpus = [tokenize(d["text"]) for d in self.docs]
+        self.bm25 = BM25Okapi(corpus)
+
+    def _load_questions(self):
+        path = os.path.join(self.data_dir, "Ответы_частые_вопросы.md")
+        if not os.path.isfile(path):
+            print(f"[KB] answers file not found: {path}")
+            return
+        text = _read(path)
+        marker = "# ПРОВЕРЯЕМЫЕ ПУНКТЫ"
+        idx = text.find(marker)
+        if idx != -1:
+            text = text[:idx]
+        matches = list(HEAD_RE.finditer(text))
+        for i, m in enumerate(matches):
+            title = m.group(1).strip()
+            start = m.end()
+            end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+            body = text[start:end].strip().strip("-").strip()
+            if body:
+                self.questions.append({"title": title, "body": body})
+        print(f"[KB] questions: {len(self.questions)}")
+
+    def search(self, query: str, k: int = 6) -> List[Dict[str, str]]:
+        if not self.bm25 or not self.docs:
+            return []
+        tokens = tokenize(query)
+        if not tokens:
+            return []
+        scores = self.bm25.get_scores(tokens)
+        ranked = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
+        out = []
+        for i in ranked[:k]:
+            if scores[i] > 0:
+                out.append(self.docs[i])
+        if not out:
+            out = [self.docs[i] for i in ranked[:k]]
+        return out
