@@ -1,15 +1,35 @@
 import asyncio
 import io
 import logging
+import re
 import sys
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart
-from aiogram.types import Message
+from aiogram.types import (
+    BotCommand,
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 
 import db
 from config import ALLOWED_IDS, BOT_TOKEN, YANDEX_API_KEY
 from kb import KnowledgeBase
+from keyboards import (
+    BTN_ASK,
+    BTN_EXAM,
+    BTN_ID,
+    BTN_LIST,
+    BTN_NEXT,
+    BTN_RESET,
+    BTN_STOP,
+    MENU_TEXTS,
+    after_answer,
+    main_menu,
+    reset_confirm,
+)
 from llm import LLMError, chat
 from stt import STTError, recognize
 
@@ -42,10 +62,45 @@ def session_id(user_id: int) -> str:
     return f"tg-{user_id}"
 
 
-async def send_long(message: Message, text: str):
+async def send_long(message: Message, text: str, reply_markup=None):
     text = text or "(пусто)"
-    for i in range(0, len(text), 4000):
-        await message.answer(text[i:i + 4000])
+    chunks = [text[i:i + 4000] for i in range(0, len(text), 4000)] or ["(пусто)"]
+    for i, chunk in enumerate(chunks):
+        await message.answer(chunk, reply_markup=reply_markup if i == len(chunks) - 1 else None)
+
+
+def short_title(title: str) -> str:
+    text = re.sub(r"^\d+\.\s*", "", title).replace("\n", " ").strip()
+    if len(text) > 48:
+        text = text[:47] + "…"
+    return text
+
+
+def questions_page(page: int = 0, per_page: int = 6):
+    total = len(kb.questions) if kb else 0
+    pages = max(1, (total + per_page - 1) // per_page)
+    page = max(0, min(page, pages - 1))
+    start = page * per_page
+    rows = []
+    for i in range(start, min(start + per_page, total)):
+        rows.append([
+            InlineKeyboardButton(
+                text=f"{i + 1}. {short_title(kb.questions[i]['title'])}",
+                callback_data=f"q:{i}",
+            )
+        ])
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⏮", callback_data="page:0"))
+        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"page:{page - 1}"))
+    nav.append(InlineKeyboardButton(text=f"{page + 1}/{pages}", callback_data="noop"))
+    if page < pages - 1:
+        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"page:{page + 1}"))
+        nav.append(InlineKeyboardButton(text="⏭", callback_data=f"page:{pages - 1}"))
+    rows.append(nav)
+    rows.append([InlineKeyboardButton(text="🔢 По номеру", callback_data="pick")])
+    rows.append([InlineKeyboardButton(text="✖️ Закрыть", callback_data="close")])
+    return f"📋 Выберите вопрос ({page + 1} из {pages}):", InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 @dp.message(CommandStart())
@@ -59,18 +114,38 @@ async def cmd_start(message: Message):
         return
     await message.answer(
         "Бот для подготовки к аттестационному экзамену риэлтера.\n\n"
-        "/exam — режим экзамена (вопрос → ваш ответ → проверка)\n"
-        "/next — следующий вопрос\n"
-        "/stop — выйти из режима экзамена\n"
-        "/ask <вопрос> — спросить по НПА\n"
-        "/reset — очистить историю\n"
-        "/id — показать ваш ID"
+        "Пользуйтесь кнопками меню внизу или командами:\n"
+        "🎓 Экзамен — вопрос → ваш ответ → проверка\n"
+        "📋 Выбрать вопрос — список всех вопросов\n"
+        "➡️ Следующий — следующий вопрос\n"
+        "❓ Спросить по НПА — вопрос по законодательству\n"
+        "⏹ Закончить — выйти из режима экзамена\n"
+        "🔄 Сброс — очистить историю и прогресс\n"
+        "🆔 Мой ID — показать ваш Telegram ID\n\n"
+        "Можно отвечать текстом или голосовым сообщением.",
+        reply_markup=main_menu(),
     )
 
 
 @dp.message(Command("id"))
 async def cmd_id(message: Message):
     await message.answer(f"Ваш Telegram ID: {message.from_user.id}")
+
+
+async def send_question(message: Message, uid: int, idx: int):
+    if not kb or not kb.questions:
+        await message.answer("База вопросов не загружена. Проверьте папку knowledge.")
+        return
+    if not 0 <= idx < len(kb.questions):
+        await message.answer("Вопрос не найден. /list — выбрать вопрос.")
+        return
+    db.set_user(uid, mode="exam", q_index=idx)
+    q = kb.questions[idx]
+    await send_long(
+        message,
+        f"Вопрос {idx + 1} из {len(kb.questions)}\n\n{q['title']}\n\nЖду ваш ответ.",
+        reply_markup=main_menu(),
+    )
 
 
 @dp.message(Command("exam"))
@@ -87,9 +162,7 @@ async def cmd_exam(message: Message):
     if idx >= len(kb.questions):
         await message.answer("Вопросы закончились. /reset — начать заново.")
         return
-    q = kb.questions[idx]
-    db.set_user(uid, mode="exam", q_index=idx)
-    await send_long(message, f"Вопрос {idx + 1} из {len(kb.questions)}\n\n{q['title']}\n\nЖду ваш ответ.")
+    await send_question(message, uid, idx)
 
 
 @dp.message(Command("next"))
@@ -106,9 +179,7 @@ async def cmd_next(message: Message):
     if idx >= len(kb.questions):
         await message.answer("Вопросы закончились. /reset — начать заново.")
         return
-    q = kb.questions[idx]
-    db.set_user(uid, mode="exam", q_index=idx)
-    await send_long(message, f"Вопрос {idx + 1} из {len(kb.questions)}\n\n{q['title']}\n\nЖду ваш ответ.")
+    await send_question(message, uid, idx)
 
 
 @dp.message(Command("stop"))
@@ -117,7 +188,7 @@ async def cmd_stop(message: Message):
     if not allowed(uid):
         return
     db.set_user(uid, mode="idle")
-    await message.answer("Вышли из режима экзамена. /exam — вернуться.")
+    await message.answer("Вышли из режима экзамена. /exam — вернуться.", reply_markup=main_menu())
 
 
 @dp.message(Command("reset"))
@@ -127,7 +198,7 @@ async def cmd_reset(message: Message):
         return
     db.clear_history(uid)
     db.reset_user(uid)
-    await message.answer("История и прогресс сброшены. /exam — начать заново.")
+    await message.answer("История и прогресс сброшены. /exam — начать заново.", reply_markup=main_menu())
 
 
 @dp.message(Command("ask"))
@@ -139,9 +210,81 @@ async def cmd_ask(message: Message):
     parts = (message.text or "").split(maxsplit=1)
     if len(parts) < 2:
         db.set_user(uid, mode="ask")
-        await message.answer("Напишите вопрос по НПА одним сообщением.")
+        await message.answer("Напишите вопрос по НПА одним сообщением.", reply_markup=main_menu())
         return
     await answer_ask(message, parts[1])
+
+
+@dp.message(Command("list"))
+async def cmd_list(message: Message):
+    uid = message.from_user.id
+    if not allowed(uid):
+        await message.answer(f"Доступ не выдан. Ваш ID: {uid}")
+        return
+    if not kb or not kb.questions:
+        await message.answer("База вопросов не загружена. Проверьте папку knowledge.")
+        return
+    text, markup = questions_page(0)
+    await message.answer(text, reply_markup=markup)
+
+
+async def select_by_number(message: Message, text: str):
+    if not kb or not kb.questions:
+        await message.answer("База вопросов не загружена.")
+        return
+    digits = re.sub(r"\D", "", text or "")
+    if not digits:
+        await message.answer(f"Введите номер вопроса от 1 до {len(kb.questions)}.")
+        return
+    n = int(digits)
+    if not 1 <= n <= len(kb.questions):
+        await message.answer(f"Номер должен быть от 1 до {len(kb.questions)}.")
+        return
+    await send_question(message, message.from_user.id, n - 1)
+
+
+@dp.message(Command("q"))
+async def cmd_q(message: Message):
+    uid = message.from_user.id
+    if not allowed(uid):
+        await message.answer(f"Доступ не выдан. Ваш ID: {uid}")
+        return
+    if not kb or not kb.questions:
+        await message.answer("База вопросов не загружена. Проверьте папку knowledge.")
+        return
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        db.set_user(uid, mode="pick")
+        await message.answer(
+            f"Введите номер вопроса от 1 до {len(kb.questions)}.",
+            reply_markup=main_menu(),
+        )
+        return
+    await select_by_number(message, parts[1])
+
+
+@dp.message(F.text.in_(MENU_TEXTS))
+async def on_menu(message: Message):
+    uid = message.from_user.id
+    if not allowed(uid):
+        await message.answer(f"Доступ не выдан. Ваш ID: {uid}")
+        return
+    text = message.text
+    if text == BTN_EXAM:
+        await cmd_exam(message)
+    elif text == BTN_LIST:
+        await cmd_list(message)
+    elif text == BTN_NEXT:
+        await cmd_next(message)
+    elif text == BTN_ASK:
+        db.set_user(uid, mode="ask")
+        await message.answer("Напишите вопрос по НПА одним сообщением.", reply_markup=main_menu())
+    elif text == BTN_STOP:
+        await cmd_stop(message)
+    elif text == BTN_RESET:
+        await message.answer("Сбросить историю и прогресс?", reply_markup=reset_confirm())
+    elif text == BTN_ID:
+        await cmd_id(message)
 
 
 @dp.message(F.text)
@@ -198,8 +341,13 @@ async def handle_text(message: Message, text: str):
         await grade_answer(message, text, user["q_index"])
     elif user["mode"] == "ask":
         await answer_ask(message, text)
+    elif user["mode"] == "pick":
+        await select_by_number(message, text)
     else:
-        await message.answer("Выберите режим: /exam — экзамен, /ask <вопрос> — спросить по НПА.")
+        await message.answer(
+            "Выберите действие кнопками меню или командой /exam.",
+            reply_markup=main_menu(),
+        )
 
 
 async def grade_answer(message: Message, answer: str, idx: int):
@@ -222,7 +370,7 @@ async def grade_answer(message: Message, answer: str, idx: int):
         )
         db.add_history(uid, "user", answer)
         db.add_history(uid, "assistant", result)
-        await send_long(message, result + "\n\n/next — следующий вопрос.")
+        await send_long(message, result, reply_markup=after_answer())
     except LLMError as e:
         log.exception("LLM error")
         await message.answer(f"Ошибка модели: {e}")
@@ -251,6 +399,145 @@ async def answer_ask(message: Message, question: str):
         await message.answer(f"Ошибка модели: {e}")
 
 
+@dp.callback_query(F.data.startswith("page:"))
+async def cb_page(cb: CallbackQuery):
+    if not allowed(cb.from_user.id):
+        await cb.answer("Доступ не выдан", show_alert=True)
+        return
+    if not kb or not kb.questions:
+        await cb.answer("База вопросов не загружена", show_alert=True)
+        return
+    try:
+        page = int(cb.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await cb.answer()
+        return
+    text, markup = questions_page(page)
+    try:
+        await cb.message.edit_text(text, reply_markup=markup)
+    except Exception:
+        pass
+    await cb.answer()
+
+
+@dp.callback_query(F.data.startswith("q:"))
+async def cb_question(cb: CallbackQuery):
+    if not allowed(cb.from_user.id):
+        await cb.answer("Доступ не выдан", show_alert=True)
+        return
+    if not kb or not kb.questions:
+        await cb.answer("База вопросов не загружена", show_alert=True)
+        return
+    try:
+        idx = int(cb.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await cb.answer()
+        return
+    if not 0 <= idx < len(kb.questions):
+        await cb.answer("Вопрос не найден", show_alert=True)
+        return
+    await cb.answer()
+    try:
+        await cb.message.edit_text(f"Выбран вопрос {idx + 1} из {len(kb.questions)}.")
+    except Exception:
+        pass
+    await send_question(cb.message, cb.from_user.id, idx)
+
+
+@dp.callback_query(F.data == "pick")
+async def cb_pick(cb: CallbackQuery):
+    if not allowed(cb.from_user.id):
+        await cb.answer("Доступ не выдан", show_alert=True)
+        return
+    if not kb or not kb.questions:
+        await cb.answer("База вопросов не загружена", show_alert=True)
+        return
+    db.set_user(cb.from_user.id, mode="pick")
+    try:
+        await cb.message.edit_text(f"Введите номер вопроса от 1 до {len(kb.questions)} сообщением.")
+    except Exception:
+        pass
+    await cb.answer()
+
+
+@dp.callback_query(F.data == "noop")
+async def cb_noop(cb: CallbackQuery):
+    await cb.answer()
+
+
+@dp.callback_query(F.data == "close")
+async def cb_close(cb: CallbackQuery):
+    try:
+        await cb.message.delete()
+    except Exception:
+        try:
+            await cb.message.edit_text("Список закрыт.")
+        except Exception:
+            pass
+    await cb.answer()
+
+
+@dp.callback_query(F.data == "next")
+async def cb_next(cb: CallbackQuery):
+    if not allowed(cb.from_user.id):
+        await cb.answer("Доступ не выдан", show_alert=True)
+        return
+    if not kb or not kb.questions:
+        await cb.answer("База вопросов не загружена", show_alert=True)
+        return
+    user = db.get_user(cb.from_user.id)
+    idx = (user["q_index"] or 0) + 1
+    if idx >= len(kb.questions):
+        await cb.answer("Вопросы закончились. /reset — начать заново.", show_alert=True)
+        return
+    await cb.answer()
+    try:
+        await cb.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await send_question(cb.message, cb.from_user.id, idx)
+
+
+@dp.callback_query(F.data == "stop")
+async def cb_stop(cb: CallbackQuery):
+    if not allowed(cb.from_user.id):
+        await cb.answer("Доступ не выдан", show_alert=True)
+        return
+    db.set_user(cb.from_user.id, mode="idle")
+    await cb.answer("Ок")
+    try:
+        await cb.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await cb.message.answer(
+        "Вышли из режима экзамена. /exam — вернуться.",
+        reply_markup=main_menu(),
+    )
+
+
+@dp.callback_query(F.data == "reset_yes")
+async def cb_reset_yes(cb: CallbackQuery):
+    if not allowed(cb.from_user.id):
+        await cb.answer("Доступ не выдан", show_alert=True)
+        return
+    db.clear_history(cb.from_user.id)
+    db.reset_user(cb.from_user.id)
+    await cb.answer("Сброшено")
+    try:
+        await cb.message.edit_text("История и прогресс сброшены. /exam — начать заново.")
+    except Exception:
+        pass
+
+
+@dp.callback_query(F.data == "reset_no")
+async def cb_reset_no(cb: CallbackQuery):
+    await cb.answer("Отменено")
+    try:
+        await cb.message.edit_text("Сброс отменён.")
+    except Exception:
+        pass
+
+
 async def main():
     global kb
     if not BOT_TOKEN:
@@ -259,6 +546,16 @@ async def main():
     db.init()
     kb = KnowledgeBase()
     bot = Bot(token=BOT_TOKEN)
+    await bot.set_my_commands([
+        BotCommand(command="exam", description="🎓 Режим экзамена"),
+        BotCommand(command="list", description="📋 Выбрать вопрос из списка"),
+        BotCommand(command="q", description="🔢 Выбрать вопрос по номеру"),
+        BotCommand(command="next", description="➡️ Следующий вопрос"),
+        BotCommand(command="ask", description="❓ Спросить по НПА"),
+        BotCommand(command="stop", description="⏹ Закончить экзамен"),
+        BotCommand(command="reset", description="🔄 Сбросить прогресс"),
+        BotCommand(command="id", description="🆔 Мой ID"),
+    ])
     log.info("Bot started")
     await dp.start_polling(bot)
 
