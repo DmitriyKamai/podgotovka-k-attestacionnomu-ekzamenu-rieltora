@@ -12,20 +12,26 @@ BTN_ASK = "❓ Спросить по НПА"
 BTN_STOP = "⏹ Закончить"
 BTN_RESET = "🔄 Сброс"
 BTN_ID = "🆔 Мой ID"
+BTN_STATS = "📊 Статистика"
+BTN_DIAG = "🔧 Диагностика"
 
 MENU_TEXTS = {
-    BTN_EXAM, BTN_LIST, BTN_NEXT, BTN_ASK, BTN_STOP, BTN_RESET, BTN_ID
+    BTN_EXAM, BTN_LIST, BTN_NEXT, BTN_ASK, BTN_STOP, BTN_RESET,
+    BTN_ID, BTN_STATS, BTN_DIAG,
 }
 
 
-def main_menu() -> ReplyKeyboardMarkup:
+def main_menu(admin: bool = False) -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text=BTN_EXAM), KeyboardButton(text=BTN_LIST)],
+        [KeyboardButton(text=BTN_NEXT), KeyboardButton(text=BTN_ASK)],
+        [KeyboardButton(text=BTN_STOP), KeyboardButton(text=BTN_RESET)],
+    ]
+    if admin:
+        rows.append([KeyboardButton(text=BTN_STATS), KeyboardButton(text=BTN_DIAG)])
+        rows.append([KeyboardButton(text=BTN_ID)])
     return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text=BTN_EXAM), KeyboardButton(text=BTN_LIST)],
-            [KeyboardButton(text=BTN_NEXT), KeyboardButton(text=BTN_ASK)],
-            [KeyboardButton(text=BTN_STOP), KeyboardButton(text=BTN_RESET)],
-            [KeyboardButton(text=BTN_ID)],
-        ],
+        keyboard=rows,
         resize_keyboard=True,
         is_persistent=True,
         input_field_placeholder="Выберите действие или напишите ответ",

@@ -9,6 +9,7 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (
     BotCommand,
+    BotCommandScopeChat,
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -16,16 +17,18 @@ from aiogram.types import (
 )
 
 import db
-from config import ALLOWED_IDS, BASE_DIR, BOT_TOKEN, DATA_DIR, YANDEX_API_KEY
-from formatting import md_to_html, split_html
+from config import ADMIN_ID, ALLOWED_IDS, BASE_DIR, BOT_TOKEN, DATA_DIR, YANDEX_API_KEY
+from formatting import extract_score, md_to_html, split_html
 from kb import KnowledgeBase
 from keyboards import (
     BTN_ASK,
+    BTN_DIAG,
     BTN_EXAM,
     BTN_ID,
     BTN_LIST,
     BTN_NEXT,
     BTN_RESET,
+    BTN_STATS,
     BTN_STOP,
     MENU_TEXTS,
     after_answer,
@@ -61,8 +64,16 @@ SYSTEM_ASK = (
 )
 
 
+def is_admin(user_id: int) -> bool:
+    return user_id == ADMIN_ID
+
+
 def allowed(user_id: int) -> bool:
-    return not ALLOWED_IDS or user_id in ALLOWED_IDS
+    return is_admin(user_id) or not ALLOWED_IDS or user_id in ALLOWED_IDS
+
+
+def menu(uid: int):
+    return main_menu(is_admin(uid))
 
 
 def session_id(user_id: int) -> str:
@@ -126,7 +137,7 @@ async def cmd_start(message: Message):
             "Передайте его администратору, чтобы вас добавили в белый список."
         )
         return
-    await message.answer(
+    text = (
         "Бот для подготовки к аттестационному экзамену риэлтера.\n\n"
         "Пользуйтесь кнопками меню внизу или командами:\n"
         "🎓 Экзамен — вопрос → ваш ответ → проверка\n"
@@ -134,23 +145,28 @@ async def cmd_start(message: Message):
         "➡️ Следующий — следующий вопрос\n"
         "❓ Спросить по НПА — вопрос по законодательству\n"
         "⏹ Закончить — выйти из режима экзамена\n"
-        "🔄 Сброс — очистить историю и прогресс\n"
-        "🆔 Мой ID — показать ваш Telegram ID\n\n"
-        "Можно отвечать текстом или голосовым сообщением.",
-        reply_markup=main_menu(),
+        "🔄 Сброс — очистить историю и прогресс\n\n"
+        "Можно отвечать текстом или голосовым сообщением."
     )
+    if is_admin(uid):
+        text += "\n\nАдмин-панель: 📊 Статистика, 🔧 Диагностика."
+    await message.answer(text, reply_markup=menu(uid))
 
 
 @dp.message(Command("id"))
 async def cmd_id(message: Message):
-    await message.answer(f"Ваш Telegram ID: {message.from_user.id}")
+    uid = message.from_user.id
+    if not is_admin(uid):
+        await message.answer("Команда доступна только администратору.")
+        return
+    await message.answer(f"Ваш Telegram ID: {uid}")
 
 
 @dp.message(Command("diag"))
 async def cmd_diag(message: Message):
     uid = message.from_user.id
-    if not allowed(uid):
-        await message.answer(f"Доступ не выдан. Ваш ID: {uid}")
+    if not is_admin(uid):
+        await message.answer("Команда доступна только администратору.")
         return
     lines = [
         "🔧 Диагностика базы",
@@ -169,6 +185,37 @@ async def cmd_diag(message: Message):
     await message.answer("\n".join(lines))
 
 
+@dp.message(Command("stats"))
+async def cmd_stats(message: Message):
+    uid = message.from_user.id
+    if not is_admin(uid):
+        await message.answer("Команда доступна только администратору.")
+        return
+    totals = db.stats_totals()
+    rows = db.stats()
+    if not totals["count"]:
+        await message.answer("📊 Статистика пока пуста — ни один ответ ещё не проверен.")
+        return
+    avg_all = f"{totals['avg']:.2f}" if totals["avg"] is not None else "—"
+    lines = [
+        "📊 Статистика",
+        f"Всего ответов: {totals['count']}",
+        f"Средний балл: {avg_all}",
+        f"Пользователей: {totals['users']}",
+        "",
+    ]
+    for i, r in enumerate(rows, 1):
+        if r["username"]:
+            name = f"@{r['username']}"
+        elif r["first_name"]:
+            name = r["first_name"]
+        else:
+            name = f"ID {r['user_id']}"
+        avg = f"{r['avg']:.2f}" if r["avg"] is not None else "—"
+        lines.append(f"{i}. {name} — {r['count']} отв., средний {avg}")
+    await send_long(message, "\n".join(lines))
+
+
 async def send_question(message: Message, uid: int, idx: int):
     if not kb or not kb.questions:
         await message.answer("База вопросов не загружена. Проверьте папку knowledge или отправьте /diag.")
@@ -181,7 +228,7 @@ async def send_question(message: Message, uid: int, idx: int):
     await send_long(
         message,
         f"Вопрос {idx + 1} из {len(kb.questions)}\n\n{q['title']}\n\nЖду ваш ответ.",
-        reply_markup=main_menu(),
+        reply_markup=menu(uid),
     )
 
 
@@ -225,7 +272,7 @@ async def cmd_stop(message: Message):
     if not allowed(uid):
         return
     db.set_user(uid, mode="idle")
-    await message.answer("Вышли из режима экзамена. /exam — вернуться.", reply_markup=main_menu())
+    await message.answer("Вышли из режима экзамена. /exam — вернуться.", reply_markup=menu(uid))
 
 
 @dp.message(Command("reset"))
@@ -235,7 +282,7 @@ async def cmd_reset(message: Message):
         return
     db.clear_history(uid)
     db.reset_user(uid)
-    await message.answer("История и прогресс сброшены. /exam — начать заново.", reply_markup=main_menu())
+    await message.answer("История и прогресс сброшены. /exam — начать заново.", reply_markup=menu(uid))
 
 
 @dp.message(Command("ask"))
@@ -247,7 +294,7 @@ async def cmd_ask(message: Message):
     parts = (message.text or "").split(maxsplit=1)
     if len(parts) < 2:
         db.set_user(uid, mode="ask")
-        await message.answer("Напишите вопрос по НПА одним сообщением.", reply_markup=main_menu())
+        await message.answer("Напишите вопрос по НПА одним сообщением.", reply_markup=menu(uid))
         return
     await answer_ask(message, parts[1])
 
@@ -294,7 +341,7 @@ async def cmd_q(message: Message):
         db.set_user(uid, mode="pick")
         await message.answer(
             f"Введите номер вопроса от 1 до {len(kb.questions)}.",
-            reply_markup=main_menu(),
+            reply_markup=menu(uid),
         )
         return
     await select_by_number(message, parts[1])
@@ -315,11 +362,15 @@ async def on_menu(message: Message):
         await cmd_next(message)
     elif text == BTN_ASK:
         db.set_user(uid, mode="ask")
-        await message.answer("Напишите вопрос по НПА одним сообщением.", reply_markup=main_menu())
+        await message.answer("Напишите вопрос по НПА одним сообщением.", reply_markup=menu(uid))
     elif text == BTN_STOP:
         await cmd_stop(message)
     elif text == BTN_RESET:
         await message.answer("Сбросить историю и прогресс?", reply_markup=reset_confirm())
+    elif text == BTN_STATS:
+        await cmd_stats(message)
+    elif text == BTN_DIAG:
+        await cmd_diag(message)
     elif text == BTN_ID:
         await cmd_id(message)
 
@@ -383,7 +434,7 @@ async def handle_text(message: Message, text: str):
     else:
         await message.answer(
             "Выберите действие кнопками меню или командой /exam.",
-            reply_markup=main_menu(),
+            reply_markup=menu(uid),
         )
 
 
@@ -407,6 +458,14 @@ async def grade_answer(message: Message, answer: str, idx: int):
         )
         db.add_history(uid, "user", answer)
         db.add_history(uid, "assistant", result)
+        db.record_answer(
+            uid,
+            message.from_user.username,
+            message.from_user.full_name,
+            idx,
+            q["title"],
+            extract_score(result),
+        )
         await send_long(
             message,
             md_to_html(result),
@@ -553,7 +612,7 @@ async def cb_stop(cb: CallbackQuery):
         pass
     await cb.message.answer(
         "Вышли из режима экзамена. /exam — вернуться.",
-        reply_markup=main_menu(),
+        reply_markup=menu(cb.from_user.id),
     )
 
 
@@ -588,7 +647,8 @@ async def main():
     db.init()
     kb = KnowledgeBase()
     bot = Bot(token=BOT_TOKEN)
-    await bot.set_my_commands([
+    public_commands = [
+        BotCommand(command="start", description="🏠 Главное меню"),
         BotCommand(command="exam", description="🎓 Режим экзамена"),
         BotCommand(command="list", description="📋 Выбрать вопрос из списка"),
         BotCommand(command="q", description="🔢 Выбрать вопрос по номеру"),
@@ -596,9 +656,20 @@ async def main():
         BotCommand(command="ask", description="❓ Спросить по НПА"),
         BotCommand(command="stop", description="⏹ Закончить экзамен"),
         BotCommand(command="reset", description="🔄 Сбросить прогресс"),
-        BotCommand(command="id", description="🆔 Мой ID"),
+    ]
+    admin_commands = public_commands + [
+        BotCommand(command="stats", description="📊 Статистика ответов"),
         BotCommand(command="diag", description="🔧 Диагностика базы"),
-    ])
+        BotCommand(command="id", description="🆔 Мой ID"),
+    ]
+    await bot.set_my_commands(public_commands)
+    try:
+        await bot.set_my_commands(
+            admin_commands,
+            scope=BotCommandScopeChat(chat_id=ADMIN_ID),
+        )
+    except Exception:
+        log.exception("Не удалось установить команды для администратора")
     log.info("Bot started")
     await dp.start_polling(bot)
 

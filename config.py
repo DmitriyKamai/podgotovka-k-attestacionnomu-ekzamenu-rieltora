@@ -15,6 +15,9 @@ YANDEX_STT_URL = os.getenv(
     "YANDEX_STT_URL", "https://stt.api.cloud.yandex.net/speech/v1/stt:recognize"
 ).strip()
 
+# Администратор: статистика и диагностика доступны только этому ID.
+ADMIN_ID = 7930922924
+
 ALLOWED_IDS = {
     int(x) for x in os.getenv("ALLOWED_IDS", "").replace(" ", "").split(",") if x
 }

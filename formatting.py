@@ -9,6 +9,17 @@ ITALIC_RE = re.compile(r"(?<![\w*])\*([^*\n]+?)\*(?![\w*])")
 HEAD_RE = re.compile(r"(?m)^#{1,6}\s*(.+?)\s*$")
 BULLET_RE = re.compile(r"(?m)^\s*[-*]\s+")
 TAG_RE = re.compile(r"<(/?)(b|i|code|a)(\s[^>]*)?>")
+SCORE_RE = re.compile(r"оценк\w*[^\d]{0,20}([2-5])(?:\s*/\s*5)?", re.I)
+SCORE_SLASH_RE = re.compile(r"\b([2-5])\s*/\s*5\b")
+
+
+def extract_score(text: str) -> int | None:
+    text = text or ""
+    m = SCORE_RE.search(text)
+    if m:
+        return int(m.group(1))
+    m = SCORE_SLASH_RE.search(text)
+    return int(m.group(1)) if m else None
 
 
 def md_to_html(text: str) -> str:

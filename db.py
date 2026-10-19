@@ -29,6 +29,19 @@ def init():
                )"""
         )
         c.execute("CREATE INDEX IF NOT EXISTS idx_hist_user ON history(user_id)")
+        c.execute(
+            """CREATE TABLE IF NOT EXISTS answers (
+                   id INTEGER PRIMARY KEY AUTOINCREMENT,
+                   user_id INTEGER NOT NULL,
+                   username TEXT,
+                   first_name TEXT,
+                   q_index INTEGER,
+                   question TEXT,
+                   score INTEGER,
+                   ts TEXT NOT NULL
+               )"""
+        )
+        c.execute("CREATE INDEX IF NOT EXISTS idx_answers_user ON answers(user_id)")
 
 
 def get_user(user_id: int) -> Dict:
@@ -83,3 +96,60 @@ def reset_user(user_id: int):
             "UPDATE users SET mode='idle', q_index=NULL, updated_at=? WHERE user_id=?",
             (datetime.utcnow().isoformat(), user_id),
         )
+
+
+def record_answer(
+    user_id: int,
+    username: str | None,
+    first_name: str | None,
+    q_index: int,
+    question: str,
+    score: int | None,
+):
+    with _conn() as c:
+        c.execute(
+            """INSERT INTO answers(user_id, username, first_name, q_index, question, score, ts)
+               VALUES(?,?,?,?,?,?,?)""",
+            (
+                user_id,
+                username,
+                first_name,
+                q_index,
+                question,
+                score,
+                datetime.utcnow().isoformat(),
+            ),
+        )
+
+
+def stats(limit: int = 100) -> List[Dict]:
+    with _conn() as c:
+        rows = c.execute(
+            """SELECT user_id, username, first_name,
+                      COUNT(*) AS cnt,
+                      AVG(score) AS avg_score
+               FROM answers
+               GROUP BY user_id
+               ORDER BY cnt DESC, avg_score DESC
+               LIMIT ?""",
+            (limit,),
+        ).fetchall()
+    return [
+        {
+            "user_id": r[0],
+            "username": r[1],
+            "first_name": r[2],
+            "count": r[3],
+            "avg": r[4],
+        }
+        for r in rows
+    ]
+
+
+def stats_totals() -> Dict:
+    with _conn() as c:
+        row = c.execute(
+            "SELECT COUNT(*), AVG(score), COUNT(DISTINCT user_id) FROM answers"
+        ).fetchone()
+    return {"count": row[0] or 0, "avg": row[1], "users": row[2] or 0}
+
