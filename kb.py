@@ -71,11 +71,39 @@ class KnowledgeBase:
         corpus = [tokenize(d["text"]) for d in self.docs]
         self.bm25 = BM25Okapi(corpus)
 
+    def _find_answers(self):
+        candidates = [
+            os.path.join(self.data_dir, "answers.md"),
+            os.path.join(self.data_dir, "Ответы_частые_вопросы.md"),
+        ]
+        for c in candidates:
+            if os.path.isfile(c):
+                return c
+        if os.path.isdir(self.data_dir):
+            for root, _, files in os.walk(self.data_dir):
+                for name in files:
+                    if not name.lower().endswith(".md"):
+                        continue
+                    p = os.path.join(root, name)
+                    try:
+                        t = _read(p)
+                    except Exception:
+                        continue
+                    if "## " in t:
+                        return p
+        return None
+
     def _load_questions(self):
-        path = os.path.join(self.data_dir, "Ответы_частые_вопросы.md")
-        if not os.path.isfile(path):
-            print(f"[KB] answers file not found: {path}")
+        path = self._find_answers()
+        if not path:
+            print(f"[KB] answers file not found in: {self.data_dir}")
+            print(f"[KB] cwd={os.getcwd()}")
+            try:
+                print("[KB] dir:", os.listdir(self.data_dir))
+            except Exception as e:
+                print("[KB] cannot list dir:", e)
             return
+        print(f"[KB] answers: {path}")
         text = _read(path)
         marker = "# ПРОВЕРЯЕМЫЕ ПУНКТЫ"
         idx = text.find(marker)

@@ -12,7 +12,10 @@ MODEL = os.getenv("MODEL", "deepseek-v4.1-flash").strip()
 ALLOWED_IDS = {
     int(x) for x in os.getenv("ALLOWED_IDS", "").replace(" ", "").split(",") if x
 }
-DATA_DIR = os.getenv("DATA_DIR", os.path.join(BASE_DIR, "knowledge"))
+_default_data = os.path.join(BASE_DIR, "knowledge")
+if not os.path.isdir(_default_data) and os.path.isdir(os.path.join(BASE_DIR, "data")):
+    _default_data = os.path.join(BASE_DIR, "data")
+DATA_DIR = os.getenv("DATA_DIR", _default_data)
 DB_PATH = os.getenv("DB_PATH", os.path.join(BASE_DIR, "bot.sqlite3"))
 MAX_HISTORY = int(os.getenv("MAX_HISTORY", "8"))
 USER_AGENT = os.getenv("USER_AGENT", "exam-prep-bot/1.0")
