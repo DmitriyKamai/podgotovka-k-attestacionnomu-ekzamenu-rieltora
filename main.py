@@ -101,6 +101,20 @@ def short_title(title: str) -> str:
     return text
 
 
+def program_number(title: str) -> int | None:
+    m = re.match(r"^\s*(\d+)\.", title)
+    return int(m.group(1)) if m else None
+
+
+def find_program_index(num: int) -> int | None:
+    if not kb:
+        return None
+    for i, q in enumerate(kb.questions):
+        if program_number(q["title"]) == num:
+            return i
+    return None
+
+
 def questions_page(page: int = 0, per_page: int = 6):
     total = len(kb.questions) if kb else 0
     pages = max(1, (total + per_page - 1) // per_page)
@@ -108,11 +122,11 @@ def questions_page(page: int = 0, per_page: int = 6):
     start = page * per_page
     rows = []
     for i in range(start, min(start + per_page, total)):
+        title = kb.questions[i]["title"]
+        num = program_number(title)
+        label = f"{num}. {short_title(title)}" if num is not None else f"• {short_title(title)}"
         rows.append([
-            InlineKeyboardButton(
-                text=f"{i + 1}. {short_title(kb.questions[i]['title'])}",
-                callback_data=f"q:{i}",
-            )
+            InlineKeyboardButton(text=label, callback_data=f"q:{i}")
         ])
     nav = []
     if page > 0:
@@ -225,9 +239,11 @@ async def send_question(message: Message, uid: int, idx: int):
         return
     db.set_user(uid, mode="exam", q_index=idx)
     q = kb.questions[idx]
+    num = program_number(q["title"])
+    label = f" (п. {num} Программы)" if num is not None else ""
     await send_long(
         message,
-        f"Вопрос {idx + 1} из {len(kb.questions)}\n\n{q['title']}\n\nЖду ваш ответ.",
+        f"Вопрос {idx + 1} из {len(kb.questions)}{label}\n\n{q['title']}\n\nЖду ваш ответ.",
         reply_markup=menu(uid),
     )
 
@@ -318,13 +334,16 @@ async def select_by_number(message: Message, text: str):
         return
     digits = re.sub(r"\D", "", text or "")
     if not digits:
-        await message.answer(f"Введите номер вопроса от 1 до {len(kb.questions)}.")
+        await message.answer("Введите номер пункта Программы, например 43.")
         return
     n = int(digits)
-    if not 1 <= n <= len(kb.questions):
-        await message.answer(f"Номер должен быть от 1 до {len(kb.questions)}.")
+    idx = find_program_index(n)
+    if idx is None:
+        await message.answer(
+            f"Вопроса с номером {n} нет в списке. Откройте /list и выберите из списка."
+        )
         return
-    await send_question(message, message.from_user.id, n - 1)
+    await send_question(message, message.from_user.id, idx)
 
 
 @dp.message(Command("q"))
@@ -340,7 +359,7 @@ async def cmd_q(message: Message):
     if len(parts) < 2:
         db.set_user(uid, mode="pick")
         await message.answer(
-            f"Введите номер вопроса от 1 до {len(kb.questions)}.",
+            "Введите номер пункта Программы, например 43.",
             reply_markup=menu(uid),
         )
         return
@@ -555,7 +574,7 @@ async def cb_pick(cb: CallbackQuery):
         return
     db.set_user(cb.from_user.id, mode="pick")
     try:
-        await cb.message.edit_text(f"Введите номер вопроса от 1 до {len(kb.questions)} сообщением.")
+        await cb.message.edit_text("Введите номер пункта Программы сообщением, например 43.")
     except Exception:
         pass
     await cb.answer()
@@ -651,7 +670,7 @@ async def main():
         BotCommand(command="start", description="🏠 Главное меню"),
         BotCommand(command="exam", description="🎓 Режим экзамена"),
         BotCommand(command="list", description="📋 Выбрать вопрос из списка"),
-        BotCommand(command="q", description="🔢 Выбрать вопрос по номеру"),
+        BotCommand(command="q", description="🔢 Выбрать вопрос по номеру Программы"),
         BotCommand(command="next", description="➡️ Следующий вопрос"),
         BotCommand(command="ask", description="❓ Спросить по НПА"),
         BotCommand(command="stop", description="⏹ Закончить экзамен"),

@@ -8,6 +8,12 @@ from config import DATA_DIR
 
 TOKEN_RE = re.compile(r"[а-яёa-z0-9]+", re.IGNORECASE)
 HEAD_RE = re.compile(r"(?m)^##\s+(.+?)\s*$")
+PROGRAM_RE = re.compile(r"^\s*(\d+)\.\s*")
+
+
+def _program_key(q: Dict[str, str]):
+    m = PROGRAM_RE.match(q["title"])
+    return (0, int(m.group(1))) if m else (1, 0)
 
 
 def tokenize(text: str) -> List[str]:
@@ -125,6 +131,8 @@ class KnowledgeBase:
             body = text[start:end].strip().strip("-").strip()
             if body:
                 self.questions.append({"title": title, "body": body})
+        self.questions.sort(key=_program_key)
+        print("[KB] order: program numbers (unnumbered at end)", flush=True)
         print(f"[KB] questions: {len(self.questions)}", flush=True)
         if not self.questions:
             print("[KB] no '## ' headings parsed; first 300 chars:", flush=True)
