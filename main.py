@@ -78,7 +78,7 @@ async def cmd_exam(message: Message):
         await message.answer(f"Доступ не выдан. Ваш ID: {uid}")
         return
     if not kb or not kb.questions:
-        await message.answer("База вопросов не загружена. Проверьте папку data.")
+        await message.answer("База вопросов не загружена. Проверьте папку knowledge.")
         return
     user = db.get_user(uid)
     idx = user["q_index"] if user["q_index"] is not None else 0
