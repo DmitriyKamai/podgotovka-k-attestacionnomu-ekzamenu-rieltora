@@ -1,4 +1,5 @@
 import asyncio
+import io
 import logging
 import sys
 
@@ -7,9 +8,10 @@ from aiogram.filters import Command, CommandStart
 from aiogram.types import Message
 
 import db
-from config import ALLOWED_IDS, BOT_TOKEN
+from config import ALLOWED_IDS, BOT_TOKEN, YANDEX_API_KEY
 from kb import KnowledgeBase
 from llm import LLMError, chat
+from stt import STTError, recognize
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("exam-bot")
@@ -124,7 +126,7 @@ async def cmd_reset(message: Message):
     if not allowed(uid):
         return
     db.clear_history(uid)
-    db.set_user(uid, mode="idle", q_index=None)
+    db.reset_user(uid)
     await message.answer("История и прогресс сброшены. /exam — начать заново.")
 
 
@@ -148,10 +150,50 @@ async def on_text(message: Message):
     if not allowed(uid):
         await message.answer(f"Доступ не выдан. Ваш ID: {uid}")
         return
-    user = db.get_user(uid)
     text = (message.text or "").strip()
     if not text:
         return
+    await handle_text(message, text)
+
+
+@dp.message(F.voice)
+async def on_voice(message: Message):
+    uid = message.from_user.id
+    if not allowed(uid):
+        await message.answer(f"Доступ не выдан. Ваш ID: {uid}")
+        return
+    if not YANDEX_API_KEY:
+        await message.answer(
+            "Голосовые сообщения не настроены.\n"
+            "Добавьте YANDEX_API_KEY и YANDEX_FOLDER_ID в .env и перезапустите бота."
+        )
+        return
+    voice = message.voice
+    try:
+        await message.answer("🎤 Распознаю…")
+        tg_file = await message.bot.get_file(voice.file_id)
+        buf = io.BytesIO()
+        await message.bot.download_file(tg_file.file_path, destination=buf)
+        text = await recognize(buf.getvalue(), duration=voice.duration or 0)
+    except STTError as e:
+        log.warning("STT error: %s", e)
+        await message.answer(f"Не удалось распознать: {e}")
+        return
+    except Exception:
+        log.exception("voice download failed")
+        await message.answer("Ошибка при загрузке голосового. Попробуйте ещё раз.")
+        return
+    text = (text or "").strip()
+    if not text:
+        await message.answer("Не разобрал речь. Попробуйте ещё раз или напишите текстом.")
+        return
+    await send_long(message, f"🎤 {text}")
+    await handle_text(message, text)
+
+
+async def handle_text(message: Message, text: str):
+    uid = message.from_user.id
+    user = db.get_user(uid)
     if user["mode"] == "exam" and user["q_index"] is not None:
         await grade_answer(message, text, user["q_index"])
     elif user["mode"] == "ask":

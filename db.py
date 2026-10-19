@@ -75,3 +75,11 @@ def get_history(user_id: int, limit: int = 8) -> List[Dict[str, str]]:
 def clear_history(user_id: int):
     with _conn() as c:
         c.execute("DELETE FROM history WHERE user_id=?", (user_id,))
+
+
+def reset_user(user_id: int):
+    with _conn() as c:
+        c.execute(
+            "UPDATE users SET mode='idle', q_index=NULL, updated_at=? WHERE user_id=?",
+            (datetime.utcnow().isoformat(), user_id),
+        )

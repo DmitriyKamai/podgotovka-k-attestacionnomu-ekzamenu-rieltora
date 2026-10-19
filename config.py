@@ -9,6 +9,12 @@ GO_API_KEY = os.getenv("GO_API_KEY", "").strip()
 GO_BASE_URL = os.getenv("GO_BASE_URL", "https://opencode.ai/inference/go/openai/v1").strip()
 MODEL = os.getenv("MODEL", "deepseek-v4.1-flash").strip()
 
+YANDEX_API_KEY = os.getenv("YANDEX_API_KEY", "").strip()
+YANDEX_FOLDER_ID = os.getenv("YANDEX_FOLDER_ID", "").strip()
+YANDEX_STT_URL = os.getenv(
+    "YANDEX_STT_URL", "https://stt.api.cloud.yandex.net/speech/v1/stt:recognize"
+).strip()
+
 ALLOWED_IDS = {
     int(x) for x in os.getenv("ALLOWED_IDS", "").replace(" ", "").split(",") if x
 }
