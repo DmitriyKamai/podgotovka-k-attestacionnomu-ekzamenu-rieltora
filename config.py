@@ -40,10 +40,23 @@ _candidates = [
     os.path.join(os.getcwd(), "knowledge"),
     os.path.join(os.getcwd(), "data"),
 ]
-DATA_DIR = next(
-    (p for p in _candidates if p and os.path.isdir(p)),
-    os.path.join(BASE_DIR, "knowledge"),
-)
+
+
+def _has_answers(path: str) -> bool:
+    if not path or not os.path.isdir(path):
+        return False
+    return any(
+        os.path.isfile(os.path.join(path, name))
+        for name in ("answers.md", "Ответы_частые_вопросы.md")
+    )
+
+
+DATA_DIR = next((p for p in _candidates if _has_answers(p)), None)
+if not DATA_DIR:
+    DATA_DIR = next(
+        (p for p in _candidates if p and os.path.isdir(p)),
+        os.path.join(BASE_DIR, "knowledge"),
+    )
 DB_PATH = os.getenv("DB_PATH", os.path.join(BASE_DIR, "bot.sqlite3"))
 MAX_HISTORY = int(os.getenv("MAX_HISTORY", "8"))
 USER_AGENT = os.getenv("USER_AGENT", "exam-prep-bot/1.0")
