@@ -16,6 +16,7 @@ from aiogram.types import (
 
 import db
 from config import ALLOWED_IDS, BOT_TOKEN, YANDEX_API_KEY
+from formatting import md_to_html, split_html
 from kb import KnowledgeBase
 from keyboards import (
     BTN_ASK,
@@ -42,15 +43,20 @@ kb: KnowledgeBase | None = None
 SYSTEM_EXAM = (
     "Ты — член экзаменационной комиссии по аттестации риэлтеров (Республика Беларусь). "
     "Тебе дают вопрос, эталонный ответ и ответ претендента. Проверяй ПО СМЫСЛУ, не требуя дословного совпадения. "
-    "Структура ответа: 1) ✅ что верно; 2) ⚠️ что неточно или упущено (с пояснением); "
-    "3) 📖 краткий эталон; 4) Оценка: 2–5 (зачёт — 4–5). "
+    "Оформляй ответ строго так, с пустой строкой между разделами:\n"
+    "1) ✅ **Что верно**\n- ...\n\n"
+    "2) ⚠️ **Что неточно или упущено**\n- ...\n\n"
+    "3) 📖 **Краткий эталон**\n...\n\n"
+    "4) **Оценка: N/5** (зачёт — 4–5)\n"
+    "Каждый пункт — с новой строки. Не используй таблицы. "
     "Не выдумывай нормы, которых нет в эталоне. Пиши по-русски, кратко и по делу."
 )
 
 SYSTEM_ASK = (
     "Ты — помощник по подготовке к аттестационному экзамену риэлтера (Беларусь). "
     "Отвечай СТРОГО по предоставленному контексту из НПА. Указывай статьи и акты. "
-    "Если в контексте нет ответа — честно скажи, что данных недостаточно. Не выдумывай."
+    "Оформляй аккуратно: короткие абзацы, списки с новой строки, ключевые термины — **жирным**. "
+    "Не используй таблицы. Если в контексте нет ответа — честно скажи, что данных недостаточно. Не выдумывай."
 )
 
 
@@ -62,11 +68,18 @@ def session_id(user_id: int) -> str:
     return f"tg-{user_id}"
 
 
-async def send_long(message: Message, text: str, reply_markup=None):
+async def send_long(message: Message, text: str, reply_markup=None, parse_mode: str | None = None):
     text = text or "(пусто)"
-    chunks = [text[i:i + 4000] for i in range(0, len(text), 4000)] or ["(пусто)"]
+    if parse_mode == "HTML":
+        chunks = split_html(text)
+    else:
+        chunks = [text[i:i + 4000] for i in range(0, len(text), 4000)] or ["(пусто)"]
     for i, chunk in enumerate(chunks):
-        await message.answer(chunk, reply_markup=reply_markup if i == len(chunks) - 1 else None)
+        await message.answer(
+            chunk,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup if i == len(chunks) - 1 else None,
+        )
 
 
 def short_title(title: str) -> str:
@@ -370,7 +383,12 @@ async def grade_answer(message: Message, answer: str, idx: int):
         )
         db.add_history(uid, "user", answer)
         db.add_history(uid, "assistant", result)
-        await send_long(message, result, reply_markup=after_answer())
+        await send_long(
+            message,
+            md_to_html(result),
+            reply_markup=after_answer(),
+            parse_mode="HTML",
+        )
     except LLMError as e:
         log.exception("LLM error")
         await message.answer(f"Ошибка модели: {e}")
@@ -393,7 +411,7 @@ async def answer_ask(message: Message, question: str):
         )
         db.add_history(uid, "user", question)
         db.add_history(uid, "assistant", result)
-        await send_long(message, result)
+        await send_long(message, md_to_html(result), parse_mode="HTML")
     except LLMError as e:
         log.exception("LLM error")
         await message.answer(f"Ошибка модели: {e}")
