@@ -7,7 +7,7 @@ class LLMError(Exception):
     pass
 
 
-async def chat(messages, session_id: str, max_tokens: int = 1200, temperature: float = 0.2) -> str:
+async def chat(messages, session_id: str, max_tokens: int = 3000, temperature: float = 0.2) -> str:
     if not GO_API_KEY:
         raise LLMError("GO_API_KEY не задан в .env")
     headers = {
@@ -29,7 +29,12 @@ async def chat(messages, session_id: str, max_tokens: int = 1200, temperature: f
         if r.status_code != 200:
             raise LLMError(f"HTTP {r.status_code}: {r.text[:400]}")
         data = r.json()
-        return data["choices"][0]["message"]["content"].strip()
+        msg = data["choices"][0]["message"]
+        content = (msg.get("content") or "").strip()
+        if not content:
+            # reasoning-модель могла израсходовать лимит на reasoning_content
+            content = (msg.get("reasoning_content") or "").strip()
+        return content
     except httpx.HTTPError as e:
         raise LLMError(f"Сетевая ошибка: {e}")
     except (KeyError, IndexError) as e:

@@ -176,7 +176,7 @@ async def grade_answer(message: Message, answer: str, idx: int):
         result = await chat(
             [{"role": "system", "content": SYSTEM_EXAM}, {"role": "user", "content": user_msg}],
             session_id=session_id(uid),
-            max_tokens=1200,
+            max_tokens=3000,
         )
         db.add_history(uid, "user", answer)
         db.add_history(uid, "assistant", result)
@@ -199,7 +199,7 @@ async def answer_ask(message: Message, question: str):
         result = await chat(
             [{"role": "system", "content": SYSTEM_ASK}, {"role": "user", "content": user_msg}],
             session_id=session_id(uid),
-            max_tokens=1400,
+            max_tokens=3000,
         )
         db.add_history(uid, "user", question)
         db.add_history(uid, "assistant", result)

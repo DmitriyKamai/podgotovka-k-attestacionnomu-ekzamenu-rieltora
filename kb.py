@@ -63,7 +63,7 @@ class KnowledgeBase:
                 text = _read(path)
                 for ch in _chunk(text):
                     self.docs.append({"source": rel, "text": ch})
-        print(f"[KB] chunks: {len(self.docs)}")
+        print(f"[KB] chunks: {len(self.docs)}", flush=True)
 
     def _build_index(self):
         if not self.docs:
@@ -103,7 +103,7 @@ class KnowledgeBase:
             except Exception as e:
                 print("[KB] cannot list dir:", e)
             return
-        print(f"[KB] answers: {path}")
+        print(f"[KB] answers: {path}", flush=True)
         text = _read(path)
         marker = "# ПРОВЕРЯЕМЫЕ ПУНКТЫ"
         idx = text.find(marker)
@@ -117,7 +117,7 @@ class KnowledgeBase:
             body = text[start:end].strip().strip("-").strip()
             if body:
                 self.questions.append({"title": title, "body": body})
-        print(f"[KB] questions: {len(self.questions)}")
+        print(f"[KB] questions: {len(self.questions)}", flush=True)
 
     def search(self, query: str, k: int = 6) -> List[Dict[str, str]]:
         if not self.bm25 or not self.docs:
