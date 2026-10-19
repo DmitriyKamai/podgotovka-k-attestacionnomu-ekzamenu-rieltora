@@ -21,7 +21,29 @@ ALLOWED_IDS = {
 _default_data = os.path.join(BASE_DIR, "knowledge")
 if not os.path.isdir(_default_data) and os.path.isdir(os.path.join(BASE_DIR, "data")):
     _default_data = os.path.join(BASE_DIR, "data")
-DATA_DIR = os.getenv("DATA_DIR", _default_data)
+
+
+def _resolve_dir(value: str) -> str:
+    value = (value or "").strip()
+    if not value:
+        return ""
+    if not os.path.isabs(value):
+        value = os.path.join(BASE_DIR, value)
+    return os.path.normpath(value)
+
+
+_env_data = _resolve_dir(os.getenv("DATA_DIR", ""))
+_candidates = [
+    _env_data,
+    os.path.join(BASE_DIR, "knowledge"),
+    os.path.join(BASE_DIR, "data"),
+    os.path.join(os.getcwd(), "knowledge"),
+    os.path.join(os.getcwd(), "data"),
+]
+DATA_DIR = next(
+    (p for p in _candidates if p and os.path.isdir(p)),
+    os.path.join(BASE_DIR, "knowledge"),
+)
 DB_PATH = os.getenv("DB_PATH", os.path.join(BASE_DIR, "bot.sqlite3"))
 MAX_HISTORY = int(os.getenv("MAX_HISTORY", "8"))
 USER_AGENT = os.getenv("USER_AGENT", "exam-prep-bot/1.0")

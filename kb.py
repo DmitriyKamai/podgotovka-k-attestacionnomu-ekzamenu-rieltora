@@ -46,14 +46,21 @@ class KnowledgeBase:
         self.docs: List[Dict[str, str]] = []
         self.bm25 = None
         self.questions: List[Dict[str, str]] = []
+        self.answers_path: str | None = None
         self._load_docs()
         self._build_index()
         self._load_questions()
 
     def _load_docs(self):
+        print(f"[KB] data_dir: {self.data_dir}", flush=True)
+        print(f"[KB] exists: {os.path.isdir(self.data_dir)} cwd={os.getcwd()}", flush=True)
         if not os.path.isdir(self.data_dir):
-            print(f"[KB] data dir not found: {self.data_dir}")
+            print(f"[KB] data dir not found: {self.data_dir}", flush=True)
             return
+        try:
+            print("[KB] dir:", sorted(os.listdir(self.data_dir))[:20], flush=True)
+        except Exception as e:
+            print("[KB] cannot list dir:", e, flush=True)
         for root, _, files in os.walk(self.data_dir):
             for name in files:
                 if not name.lower().endswith((".txt", ".md")):
@@ -96,14 +103,15 @@ class KnowledgeBase:
     def _load_questions(self):
         path = self._find_answers()
         if not path:
-            print(f"[KB] answers file not found in: {self.data_dir}")
-            print(f"[KB] cwd={os.getcwd()}")
+            print(f"[KB] answers file not found in: {self.data_dir}", flush=True)
+            print(f"[KB] cwd={os.getcwd()}", flush=True)
             try:
-                print("[KB] dir:", os.listdir(self.data_dir))
+                print("[KB] dir:", os.listdir(self.data_dir), flush=True)
             except Exception as e:
-                print("[KB] cannot list dir:", e)
+                print("[KB] cannot list dir:", e, flush=True)
             return
         print(f"[KB] answers: {path}", flush=True)
+        self.answers_path = path
         text = _read(path)
         marker = "# ПРОВЕРЯЕМЫЕ ПУНКТЫ"
         idx = text.find(marker)
@@ -118,6 +126,9 @@ class KnowledgeBase:
             if body:
                 self.questions.append({"title": title, "body": body})
         print(f"[KB] questions: {len(self.questions)}", flush=True)
+        if not self.questions:
+            print("[KB] no '## ' headings parsed; first 300 chars:", flush=True)
+            print(repr(text[:300]), flush=True)
 
     def search(self, query: str, k: int = 6) -> List[Dict[str, str]]:
         if not self.bm25 or not self.docs:

@@ -1,6 +1,7 @@
 import asyncio
 import io
 import logging
+import os
 import re
 import sys
 
@@ -15,7 +16,7 @@ from aiogram.types import (
 )
 
 import db
-from config import ALLOWED_IDS, BOT_TOKEN, YANDEX_API_KEY
+from config import ALLOWED_IDS, BASE_DIR, BOT_TOKEN, DATA_DIR, YANDEX_API_KEY
 from formatting import md_to_html, split_html
 from kb import KnowledgeBase
 from keyboards import (
@@ -145,9 +146,32 @@ async def cmd_id(message: Message):
     await message.answer(f"Ваш Telegram ID: {message.from_user.id}")
 
 
+@dp.message(Command("diag"))
+async def cmd_diag(message: Message):
+    uid = message.from_user.id
+    if not allowed(uid):
+        await message.answer(f"Доступ не выдан. Ваш ID: {uid}")
+        return
+    lines = [
+        "🔧 Диагностика базы",
+        f"BASE_DIR: {BASE_DIR}",
+        f"DATA_DIR: {DATA_DIR}",
+        f"exists: {os.path.isdir(DATA_DIR)}",
+        f"cwd: {os.getcwd()}",
+        f"answers: {kb.answers_path if kb else None}",
+        f"questions: {len(kb.questions) if kb else 0}",
+        f"chunks: {len(kb.docs) if kb else 0}",
+    ]
+    try:
+        lines.append("files: " + ", ".join(sorted(os.listdir(DATA_DIR))[:20]))
+    except Exception as e:
+        lines.append(f"files: error {e}")
+    await message.answer("\n".join(lines))
+
+
 async def send_question(message: Message, uid: int, idx: int):
     if not kb or not kb.questions:
-        await message.answer("База вопросов не загружена. Проверьте папку knowledge.")
+        await message.answer("База вопросов не загружена. Проверьте папку knowledge или отправьте /diag.")
         return
     if not 0 <= idx < len(kb.questions):
         await message.answer("Вопрос не найден. /list — выбрать вопрос.")
@@ -168,7 +192,7 @@ async def cmd_exam(message: Message):
         await message.answer(f"Доступ не выдан. Ваш ID: {uid}")
         return
     if not kb or not kb.questions:
-        await message.answer("База вопросов не загружена. Проверьте папку knowledge.")
+        await message.answer("База вопросов не загружена. Проверьте папку knowledge или отправьте /diag.")
         return
     user = db.get_user(uid)
     idx = user["q_index"] if user["q_index"] is not None else 0
@@ -185,7 +209,7 @@ async def cmd_next(message: Message):
         await message.answer(f"Доступ не выдан. Ваш ID: {uid}")
         return
     if not kb or not kb.questions:
-        await message.answer("База вопросов не загружена.")
+        await message.answer("База вопросов не загружена. Отправьте /diag.")
         return
     user = db.get_user(uid)
     idx = (user["q_index"] or 0) + 1
@@ -235,7 +259,7 @@ async def cmd_list(message: Message):
         await message.answer(f"Доступ не выдан. Ваш ID: {uid}")
         return
     if not kb or not kb.questions:
-        await message.answer("База вопросов не загружена. Проверьте папку knowledge.")
+        await message.answer("База вопросов не загружена. Проверьте папку knowledge или отправьте /diag.")
         return
     text, markup = questions_page(0)
     await message.answer(text, reply_markup=markup)
@@ -243,7 +267,7 @@ async def cmd_list(message: Message):
 
 async def select_by_number(message: Message, text: str):
     if not kb or not kb.questions:
-        await message.answer("База вопросов не загружена.")
+        await message.answer("База вопросов не загружена. Отправьте /diag.")
         return
     digits = re.sub(r"\D", "", text or "")
     if not digits:
@@ -263,7 +287,7 @@ async def cmd_q(message: Message):
         await message.answer(f"Доступ не выдан. Ваш ID: {uid}")
         return
     if not kb or not kb.questions:
-        await message.answer("База вопросов не загружена. Проверьте папку knowledge.")
+        await message.answer("База вопросов не загружена. Проверьте папку knowledge или отправьте /diag.")
         return
     parts = (message.text or "").split(maxsplit=1)
     if len(parts) < 2:
@@ -573,6 +597,7 @@ async def main():
         BotCommand(command="stop", description="⏹ Закончить экзамен"),
         BotCommand(command="reset", description="🔄 Сбросить прогресс"),
         BotCommand(command="id", description="🆔 Мой ID"),
+        BotCommand(command="diag", description="🔧 Диагностика базы"),
     ])
     log.info("Bot started")
     await dp.start_polling(bot)
