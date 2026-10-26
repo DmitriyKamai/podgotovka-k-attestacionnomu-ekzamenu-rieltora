@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import sys
+import time
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart
@@ -13,11 +14,24 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    LabeledPrice,
     Message,
+    PreCheckoutQuery,
 )
 
 import db
-from config import ADMIN_ID, ALLOWED_IDS, BASE_DIR, BOT_TOKEN, DATA_DIR, YANDEX_API_KEY
+from config import (
+    ADMIN_ID,
+    ALLOWED_IDS,
+    BASE_DIR,
+    BOT_TOKEN,
+    DATA_DIR,
+    DEMO_LIMIT,
+    PAID_MODE,
+    PRICE_STARS,
+    SUBSCRIPTION_DAYS,
+    YANDEX_API_KEY,
+)
 from formatting import extract_score, md_to_html, split_html
 from kb import KnowledgeBase
 from keyboards import (
@@ -83,6 +97,70 @@ def menu(uid: int):
 
 def session_id(user_id: int) -> str:
     return f"tg-{user_id}"
+
+
+# ---------- платный доступ ----------
+
+_invoice_link: str | None = None
+
+
+def has_access(uid: int) -> bool:
+    return is_admin(uid) or db.is_paid(uid)
+
+
+def demo_left(uid: int) -> int:
+    return max(0, DEMO_LIMIT - db.access(uid)["demo_used"])
+
+
+def total_questions() -> int:
+    return len(kb.questions) if kb else 192
+
+
+async def get_invoice_link(bot: Bot) -> str:
+    global _invoice_link
+    if not _invoice_link:
+        _invoice_link = await bot.create_invoice_link(
+            title="Полный доступ к тренажёру риэлтера",
+            description=f"Все {total_questions()} вопросов программы + ответы по НПА + «Спросить по НПА». Подписка {SUBSCRIPTION_DAYS} дней.",
+            payload="sub",
+            currency="XTR",
+            prices=[LabeledPrice(label=f"Подписка {SUBSCRIPTION_DAYS} дней", amount=PRICE_STARS)],
+            subscription_period=SUBSCRIPTION_DAYS * 86400,
+        )
+    return _invoice_link
+
+
+async def send_paywall(message: Message, uid: int, need_paid: bool = False):
+    link = await get_invoice_link(message.bot)
+    head = "Этот раздел доступен только по подписке." if need_paid else "Бесплатные вопросы закончились."
+    await message.answer(
+        f"{head}\n\n"
+        f"Подписка открывает все {total_questions()} вопросов программы, "
+        f"ответы по НПА и режим «Спросить по НПА» на {SUBSCRIPTION_DAYS} дней.\n"
+        f"Цена — {PRICE_STARS} ⭐.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text=f"💳 Оплатить {PRICE_STARS} ⭐", url=link)
+        ]]),
+    )
+
+
+async def ensure_access(message: Message, uid: int) -> bool:
+    """Допуск к вопросу: демо или подписка."""
+    if not PAID_MODE or has_access(uid):
+        return True
+    if demo_left(uid) > 0:
+        db.inc_demo(uid)
+        return True
+    await send_paywall(message, uid)
+    return False
+
+
+async def ensure_paid(message: Message, uid: int) -> bool:
+    """Допуск к платным разделам (без демо): «Спросить по НПА»."""
+    if not PAID_MODE or has_access(uid):
+        return True
+    await send_paywall(message, uid, need_paid=True)
+    return False
 
 
 async def send_long(message: Message, text: str, reply_markup=None, parse_mode: str | None = None):
@@ -190,6 +268,12 @@ async def cmd_start(message: Message):
         "🔄 Сброс — очистить историю и прогресс\n\n"
         "Можно отвечать текстом или голосовым сообщением."
     )
+    if PAID_MODE:
+        text += (
+            f"\n\n🔒 Бесплатно — первые {DEMO_LIMIT} вопросов. "
+            f"Полный доступ — по подписке {PRICE_STARS} ⭐ / {SUBSCRIPTION_DAYS} дней. "
+            "«Спросить по НПА» — только по подписке."
+        )
     if is_admin(uid):
         text += "\n\nАдмин-панель: 📊 Статистика, 🔧 Диагностика."
     await message.answer(text, reply_markup=menu(uid))
@@ -202,6 +286,45 @@ async def cmd_id(message: Message):
         await message.answer("Команда доступна только администратору.")
         return
     await message.answer(f"Ваш Telegram ID: {uid}")
+
+
+async def grant_access(message: Message, text: str):
+    uid = message.from_user.id
+    if not is_admin(uid):
+        await message.answer("Команда доступна только администратору.")
+        return
+    m = re.match(r"\s*(\d+)\s*(?:(\d+))?\s*$", text)
+    if not m:
+        await message.answer(
+            "Формат: номер ID и (необязательно) срок в днях.\n"
+            "Например:\n`123456789` — доступ навсегда\n`123456789 30` — на 30 дней",
+        )
+        return
+    target = int(m.group(1))
+    days = int(m.group(2)) if m.group(2) else None
+    db.grant(target, days=days)
+    if days:
+        await message.answer(f"✅ Выдан доступ на {days} дн. пользователю {target}.")
+    else:
+        await message.answer(f"✅ Выдан постоянный доступ пользователю {target}.")
+
+
+@dp.message(Command("grant"))
+async def cmd_grant(message: Message):
+    uid = message.from_user.id
+    if not is_admin(uid):
+        await message.answer("Команда доступна только администратору.")
+        return
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        db.set_user(uid, mode="grant")
+        await message.answer(
+            "Пришлите ID пользователя (и, если нужно, срок в днях):\n"
+            "`123456789` — навсегда\n`123456789 30` — на 30 дней",
+            reply_markup=menu(uid),
+        )
+        return
+    await grant_access(message, parts[1])
 
 
 @dp.message(Command("diag"))
@@ -290,13 +413,18 @@ async def send_question(message: Message, uid: int, idx: int):
     if not 0 <= idx < len(kb.questions):
         await message.answer("Вопрос не найден. /list — выбрать вопрос.")
         return
+    if not await ensure_access(message, uid):
+        return
     db.set_user(uid, mode="exam", q_index=idx)
     q = kb.questions[idx]
     num = program_number(q["title"])
     label = f" (п. {num} Программы)" if num is not None else ""
+    demo_note = ""
+    if PAID_MODE and not has_access(uid):
+        demo_note = f"\n\n🔒 Бесплатных вопросов осталось: {demo_left(uid)}"
     await send_long(
         message,
-        f"Вопрос {idx + 1} из {len(kb.questions)}{label}\n\n{q['title']}\n\nЖду ваш ответ.",
+        f"Вопрос {idx + 1} из {len(kb.questions)}{label}\n\n{q['title']}\n\nЖду ваш ответ.{demo_note}",
         reply_markup=menu(uid),
     )
 
@@ -359,6 +487,8 @@ async def cmd_ask(message: Message):
     uid = message.from_user.id
     if not allowed(uid):
         await message.answer(f"Доступ не выдан. Ваш ID: {uid}")
+        return
+    if not await ensure_paid(message, uid):
         return
     parts = (message.text or "").split(maxsplit=1)
     if len(parts) < 2:
@@ -433,6 +563,8 @@ async def on_menu(message: Message):
     elif text == BTN_NEXT:
         await cmd_next(message)
     elif text == BTN_ASK:
+        if not await ensure_paid(message, uid):
+            return
         db.set_user(uid, mode="ask")
         await message.answer("Напишите вопрос по НПА одним сообщением.", reply_markup=menu(uid))
     elif text == BTN_STOP:
@@ -445,6 +577,13 @@ async def on_menu(message: Message):
         await cmd_diag(message)
     elif text == BTN_ID:
         await cmd_id(message)
+    elif text == BTN_GRANT:
+        db.set_user(uid, mode="grant")
+        await message.answer(
+            "Пришлите ID пользователя (и, если нужно, срок в днях):\n"
+            "`123456789` — навсегда\n`123456789 30` — на 30 дней",
+            reply_markup=menu(uid),
+        )
 
 
 @dp.message(F.text)
@@ -503,6 +642,9 @@ async def handle_text(message: Message, text: str):
         await answer_ask(message, text)
     elif user["mode"] == "pick":
         await select_by_number(message, text)
+    elif user["mode"] == "grant":
+        db.set_user(uid, mode="idle")
+        await grant_access(message, text)
     else:
         await message.answer(
             "Выберите действие кнопками меню или командой /exam.",
@@ -551,6 +693,8 @@ async def grade_answer(message: Message, answer: str, idx: int):
 
 async def answer_ask(message: Message, question: str):
     uid = message.from_user.id
+    if not await ensure_paid(message, uid):
+        return
     context = kb.build_context(question) if kb else ""
     if not context:
         await message.answer("Не нашёл информации в базе. Уточните вопрос.")
@@ -765,6 +909,33 @@ async def cb_reset_no(cb: CallbackQuery):
         pass
 
 
+@dp.pre_checkout_query()
+async def on_pre_checkout(pcq: PreCheckoutQuery):
+    await pcq.answer(ok=True)
+
+
+@dp.message(F.successful_payment)
+async def on_successful_payment(message: Message):
+    uid = message.from_user.id
+    sp = message.successful_payment
+    until = sp.subscription_expiration_date or (int(time.time()) + SUBSCRIPTION_DAYS * 86400)
+    db.set_paid(uid, until)
+    db.record_payment(
+        uid,
+        sp.telegram_payment_charge_id,
+        sp.total_amount,
+        sp.currency,
+        bool(sp.is_recurring or sp.is_first_recurring),
+        until,
+    )
+    exp = time.strftime("%d.%m.%Y", time.localtime(until))
+    await message.answer(
+        f"✅ Оплата принята!\nПодписка активна до {exp}.\n"
+        f"Все вопросы программы и «Спросить по НПА» теперь доступны.",
+        reply_markup=menu(uid),
+    )
+
+
 async def main():
     global kb
     if not BOT_TOKEN:
@@ -787,6 +958,7 @@ async def main():
         BotCommand(command="stats", description="📊 Статистика ответов"),
         BotCommand(command="check", description="🧪 Проверка базы ответов"),
         BotCommand(command="diag", description="🔧 Диагностика базы"),
+        BotCommand(command="grant", description="➕ Выдать доступ по ID"),
         BotCommand(command="id", description="🆔 Мой ID"),
     ]
     await bot.set_my_commands(public_commands)

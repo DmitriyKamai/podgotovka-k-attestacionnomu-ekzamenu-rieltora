@@ -1,4 +1,5 @@
 import sqlite3
+import time
 from datetime import datetime
 from typing import List, Dict, Optional
 
@@ -42,6 +43,26 @@ def init():
                )"""
         )
         c.execute("CREATE INDEX IF NOT EXISTS idx_answers_user ON answers(user_id)")
+        c.execute(
+            """CREATE TABLE IF NOT EXISTS payments (
+                   id INTEGER PRIMARY KEY AUTOINCREMENT,
+                   user_id INTEGER NOT NULL,
+                   charge_id TEXT,
+                   amount INTEGER,
+                   currency TEXT,
+                   is_recurring INTEGER,
+                   until_ts INTEGER,
+                   ts TEXT NOT NULL
+               )"""
+        )
+        # миграция: добавляем поля платного доступа, если их ещё нет
+        cols = {r[1] for r in c.execute("PRAGMA table_info(users)").fetchall()}
+        if "demo_used" not in cols:
+            c.execute("ALTER TABLE users ADD COLUMN demo_used INTEGER NOT NULL DEFAULT 0")
+        if "paid_until" not in cols:
+            c.execute("ALTER TABLE users ADD COLUMN paid_until INTEGER")
+        if "granted" not in cols:
+            c.execute("ALTER TABLE users ADD COLUMN granted INTEGER NOT NULL DEFAULT 0")
 
 
 def get_user(user_id: int) -> Dict:
@@ -152,4 +173,84 @@ def stats_totals() -> Dict:
             "SELECT COUNT(*), AVG(score), COUNT(DISTINCT user_id) FROM answers"
         ).fetchone()
     return {"count": row[0] or 0, "avg": row[1], "users": row[2] or 0}
+
+
+# ---------- платный доступ ----------
+
+def access(user_id: int) -> Dict:
+    with _conn() as c:
+        row = c.execute(
+            "SELECT demo_used, paid_until, granted FROM users WHERE user_id=?",
+            (user_id,),
+        ).fetchone()
+    if row:
+        return {"demo_used": row[0] or 0, "paid_until": row[1], "granted": row[2] or 0}
+    return {"demo_used": 0, "paid_until": None, "granted": 0}
+
+
+def is_paid(user_id: int) -> bool:
+    a = access(user_id)
+    return bool(a["granted"]) or (a["paid_until"] is not None and a["paid_until"] > time.time())
+
+
+def inc_demo(user_id: int) -> int:
+    now = datetime.utcnow().isoformat()
+    with _conn() as c:
+        c.execute(
+            """INSERT INTO users(user_id, mode, demo_used, updated_at) VALUES(?,?,?,?)
+               ON CONFLICT(user_id) DO UPDATE SET demo_used=demo_used+1, updated_at=excluded.updated_at""",
+            (user_id, "idle", 1, now),
+        )
+        row = c.execute("SELECT demo_used FROM users WHERE user_id=?", (user_id,)).fetchone()
+    return row[0]
+
+
+def set_paid(user_id: int, until_ts: int):
+    now = datetime.utcnow().isoformat()
+    with _conn() as c:
+        c.execute(
+            """INSERT INTO users(user_id, mode, paid_until, updated_at) VALUES(?,?,?,?)
+               ON CONFLICT(user_id) DO UPDATE SET paid_until=excluded.paid_until, updated_at=excluded.updated_at""",
+            (user_id, "idle", int(until_ts), now),
+        )
+
+
+def grant(user_id: int, days: Optional[int] = None):
+    """Админ выдаёт доступ: без days — навсегда (granted), с days — на срок."""
+    now = datetime.utcnow().isoformat()
+    if days:
+        until = int(time.time()) + days * 86400
+        with _conn() as c:
+            c.execute(
+                """INSERT INTO users(user_id, mode, paid_until, updated_at) VALUES(?,?,?,?)
+                   ON CONFLICT(user_id) DO UPDATE SET paid_until=excluded.paid_until, updated_at=excluded.updated_at""",
+                (user_id, "idle", until, now),
+            )
+    else:
+        with _conn() as c:
+            c.execute(
+                """INSERT INTO users(user_id, mode, granted, updated_at) VALUES(?,?,?,?)
+                   ON CONFLICT(user_id) DO UPDATE SET granted=1, updated_at=excluded.updated_at""",
+                (user_id, "idle", 1, now),
+            )
+
+
+def record_payment(
+    user_id: int, charge_id: str | None, amount: int, currency: str,
+    is_recurring: bool, until_ts: int,
+):
+    with _conn() as c:
+        c.execute(
+            """INSERT INTO payments(user_id, charge_id, amount, currency, is_recurring, until_ts, ts)
+               VALUES(?,?,?,?,?,?,?)""",
+            (
+                user_id,
+                charge_id,
+                amount,
+                currency,
+                1 if is_recurring else 0,
+                int(until_ts),
+                datetime.utcnow().isoformat(),
+            ),
+        )
 
