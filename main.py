@@ -14,6 +14,7 @@ from aiogram.types import (
     BotCommand,
     BotCommandScopeChat,
     CallbackQuery,
+    FSInputFile,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     LabeledPrice,
@@ -28,6 +29,7 @@ from config import (
     BASE_DIR,
     BOT_TOKEN,
     DATA_DIR,
+    DB_PATH,
     DEFAULT_DEMO_LIMIT,
     DEFAULT_PAID_MODE,
     DEFAULT_PRICE_STARS,
@@ -67,10 +69,14 @@ kb: KnowledgeBase | None = None
 SYSTEM_EXAM = (
     "Ты — член экзаменационной комиссии по аттестации риэлтеров (Республика Беларусь). "
     "Тебе дают вопрос, эталонный ответ и ответ претендента. Проверяй ПО СМЫСЛУ, не требуя дословного совпадения. "
-    "Сначала мысленно определи оценку. Если оценка 3 или выше — начни ответ ОДНОЙ строкой реакции: "
-    "'💬 ' и до 140 знаков. Реакция должна опираться на конкретику этого ответа: что именно получилось "
-    "(названная норма, термин, структура) или чего не хватило до более высокой оценки. "
-    "Без общих похвал, лести, восторженных слов и восклицательных знаков; спокойный, рабочий тон. "
+    "Сначала мысленно определи оценку. Если оценка 3 или выше — начни ответ ОДНОЙ строкой-реакцией: "
+    "'💬 ' и до 160 знаков. В ней: (1) назови конкретную деталь этого ответа, которая удалась, и "
+    "(2) дай конкретный следующий шаг — что добавить или уточнить, чтобы ответ стал сильнее. "
+    "Если оценка 5 — отметь, что именно сделало ответ сильным, и что держать в таком же духе. "
+    "Тон — поддерживающий и рабочий, как у наставника: без лести, восторженных слов и восклицаний, "
+    "но и без сухого перечисления «есть/нет». "
+    "Хорошо: «Передаточный акт и запрет замены вы поймали верно — добавьте момент исполнения и госрегистрацию, и ответ станет полным.» "
+    "Плохо: «Есть передаточный акт, нет госрегистрации.» "
     "При оценке 2 и ниже строку '💬' НЕ добавляй. Затем — разбор строго так, с пустой строкой между разделами:\n"
     "1) ✅ **Что верно**\n- ...\n\n"
     "2) ⚠️ **Что неточно или упущено**\n- ...\n\n"
@@ -531,21 +537,52 @@ async def cmd_diag(message: Message):
     if not is_admin(uid):
         await message.answer("Команда доступна только администратору.")
         return
+    db_exists = os.path.isfile(DB_PATH)
+    db_size = os.path.getsize(DB_PATH) if db_exists else 0
+    db_in_base = os.path.dirname(os.path.abspath(DB_PATH)) == os.path.abspath(BASE_DIR)
     lines = [
         "🔧 Диагностика базы",
         f"BASE_DIR: {BASE_DIR}",
         f"DATA_DIR: {DATA_DIR}",
+        f"DB: {DB_PATH}",
+        f"DB exists: {db_exists} ({db_size} байт)",
+        f"пользователей: {db.count_users()} · ответов: {db.count_answers()}",
         f"exists: {os.path.isdir(DATA_DIR)}",
         f"cwd: {os.getcwd()}",
         f"answers: {kb.answers_path if kb else None}",
         f"questions: {len(kb.questions) if kb else 0}",
         f"chunks: {len(kb.docs) if kb else 0}",
     ]
+    if db_in_base:
+        lines.append(
+            "⚠️ БД лежит в папке бота — при передеплое она может удалиться. "
+            "Задайте DB_PATH на постоянный диск (например, /data/bot.sqlite3)."
+        )
     try:
         lines.append("files: " + ", ".join(sorted(os.listdir(DATA_DIR))[:20]))
     except Exception as e:
         lines.append(f"files: error {e}")
     await message.answer("\n".join(lines))
+
+
+@dp.message(Command("backup"))
+async def cmd_backup(message: Message):
+    uid = message.from_user.id
+    if not is_admin(uid):
+        await message.answer("Команда доступна только администратору.")
+        return
+    if not os.path.isfile(DB_PATH):
+        await message.answer("Файл базы не найден.")
+        return
+    name = f"bot_backup_{time.strftime('%Y%m%d_%H%M')}.sqlite3"
+    await message.answer_document(
+        FSInputFile(DB_PATH, filename=name),
+        caption=(
+            f"💾 Резервная копия базы\n"
+            f"пользователей: {db.count_users()} · ответов: {db.count_answers()}\n\n"
+            "Сохраните файл. Восстановление: положить его на сервер по пути DB_PATH и перезапустить бота."
+        ),
+    )
 
 
 @dp.message(Command("check"))
@@ -655,14 +692,12 @@ async def send_question(message: Message, uid: int, idx: int):
         return
     db.set_user(uid, mode="exam", q_index=idx)
     q = kb.questions[idx]
-    num = program_number(q["title"])
-    label = f" (п. {num} Программы)" if num is not None else ""
     demo_note = ""
     if paid_mode() and not has_access(uid):
         demo_note = f"\n\n🔒 Бесплатных вопросов осталось: {demo_left(uid)}"
     await send_long(
         message,
-        f"Вопрос {idx + 1} из {len(kb.questions)}{label}\n\n{q['title']}\n\nЖду ваш ответ.{demo_note}",
+        f"Вопрос {idx + 1} из {len(kb.questions)}\n\n{q['title']}\n\nЖду ваш ответ.{demo_note}",
         reply_markup=menu(uid),
     )
 
@@ -1216,6 +1251,7 @@ async def main():
         BotCommand(command="diag", description="🔧 Диагностика базы"),
         BotCommand(command="grant", description="➕ Выдать доступ по ID"),
         BotCommand(command="settings", description="⚙️ Настройки оплаты"),
+        BotCommand(command="backup", description="💾 Скачать базу"),
         BotCommand(command="id", description="🆔 Мой ID"),
     ]
     await bot.set_my_commands(public_commands)

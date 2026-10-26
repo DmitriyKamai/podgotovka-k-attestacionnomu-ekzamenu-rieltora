@@ -181,6 +181,18 @@ def stats_totals() -> Dict:
     return {"count": row[0] or 0, "avg": row[1], "users": row[2] or 0}
 
 
+def count_users() -> int:
+    with _conn() as c:
+        row = c.execute("SELECT COUNT(*) FROM users").fetchone()
+    return row[0] or 0
+
+
+def count_answers() -> int:
+    with _conn() as c:
+        row = c.execute("SELECT COUNT(*) FROM answers").fetchone()
+    return row[0] or 0
+
+
 # ---------- платный доступ ----------
 
 def access(user_id: int) -> Dict:
