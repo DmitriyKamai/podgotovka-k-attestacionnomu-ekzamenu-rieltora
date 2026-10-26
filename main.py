@@ -30,6 +30,7 @@ from config import (
     PAID_MODE,
     PRICE_STARS,
     SUBSCRIPTION_DAYS,
+    SUPPORT_URL,
     YANDEX_API_KEY,
 )
 from formatting import extract_score, md_to_html, split_html
@@ -137,7 +138,8 @@ async def send_paywall(message: Message, uid: int, need_paid: bool = False):
         f"{head}\n\n"
         f"Подписка открывает все {total_questions()} вопросов программы, "
         f"ответы по НПА и режим «Спросить по НПА» на {SUBSCRIPTION_DAYS} дней.\n"
-        f"Цена — {PRICE_STARS} ⭐.",
+        f"Цена — {PRICE_STARS} ⭐. Продлевается автоматически, отменить можно в Telegram → Настройки → Telegram Stars → Подписки.\n"
+        f"Условия: /terms.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text=f"💳 Оплатить {PRICE_STARS} ⭐", url=link)
         ]]),
@@ -274,9 +276,45 @@ async def cmd_start(message: Message):
             f"Полный доступ — по подписке {PRICE_STARS} ⭐ / {SUBSCRIPTION_DAYS} дней. "
             "«Спросить по НПА» — только по подписке."
         )
+        text += "\n\n📄 Условия — /terms, поддержка — /support."
     if is_admin(uid):
         text += "\n\nАдмин-панель: 📊 Статистика, 🔧 Диагностика."
     await message.answer(text, reply_markup=menu(uid))
+
+
+@dp.message(Command("terms"))
+async def cmd_terms(message: Message):
+    await message.answer(
+        "📄 Условия подписки\n\n"
+        f"• Услуга: доступ к тренажёру риэлтера — все {total_questions()} вопросов, проверка ответов и «Спросить по НПА».\n"
+        f"• Срок: {SUBSCRIPTION_DAYS} дней с момента оплаты, продлевается автоматически.\n"
+        f"• Цена: {PRICE_STARS} ⭐ за период.\n"
+        "• Отмена: в Telegram → Настройки → Telegram Stars → Подписки (до даты следующего списания).\n"
+        "• Возврат: по запросу через /paysupport.\n"
+        "• Доступ цифровой, без материального носителя.\n\n"
+        "Оплачивая подписку, вы подтверждаете, что ознакомились с условиями и согласны с ними."
+    )
+
+
+@dp.message(Command("support"))
+async def cmd_support(message: Message):
+    await message.answer(
+        "🛟 Поддержка\n\n"
+        "По вопросам работы бота и доступа напишите администратору: "
+        f"{SUPPORT_URL}\n"
+        "По вопросам оплаты — /paysupport."
+    )
+
+
+@dp.message(Command("paysupport"))
+async def cmd_paysupport(message: Message):
+    await message.answer(
+        "💳 Поддержка по оплате\n\n"
+        "Если оплата прошла, а доступ не открылся, или нужен возврат — напишите администратору: "
+        f"{SUPPORT_URL}\n\n"
+        "Приложите скриншот чека из Telegram (раздел «Мои звёзды» → история платежей). "
+        "Возврат рассматривается индивидуально и выполняется через refundStarPayment."
+    )
 
 
 @dp.message(Command("id"))
@@ -953,6 +991,9 @@ async def main():
         BotCommand(command="ask", description="❓ Спросить по НПА"),
         BotCommand(command="stop", description="⏹ Закончить экзамен"),
         BotCommand(command="reset", description="🔄 Сбросить прогресс"),
+        BotCommand(command="terms", description="📄 Условия подписки"),
+        BotCommand(command="support", description="🛟 Поддержка"),
+        BotCommand(command="paysupport", description="💳 Поддержка по оплате"),
     ]
     admin_commands = public_commands + [
         BotCommand(command="stats", description="📊 Статистика ответов"),

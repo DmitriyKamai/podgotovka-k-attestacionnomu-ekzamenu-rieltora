@@ -20,6 +20,7 @@ PAID_MODE = os.getenv("PAID_MODE", "1").strip() == "1"
 PRICE_STARS = int(os.getenv("PRICE_STARS", "250"))
 DEMO_LIMIT = int(os.getenv("DEMO_LIMIT", "5"))
 SUBSCRIPTION_DAYS = int(os.getenv("SUBSCRIPTION_DAYS", "30"))
+SUPPORT_URL = os.getenv("SUPPORT_URL", "tg://user?id=7930922924").strip()
 
 # Администратор: статистика и диагностика доступны только этому ID.
 ADMIN_ID = 7930922924
