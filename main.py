@@ -396,19 +396,25 @@ async def cmd_terms(message: Message):
         f"• Срок: {SUBSCRIPTION_DAYS} дней с момента оплаты, продлевается автоматически.\n"
         f"• Цена: {price_stars()} ⭐ за период.\n"
         "• Отмена: в Telegram → Настройки → Telegram Stars → Подписки (до даты следующего списания).\n"
-        "• Возврат: по запросу через /paysupport.\n"
+        "• Поддержка: @exam_admin.\n"
         "• Доступ цифровой, без материального носителя.\n\n"
         "Оплачивая подписку, вы подтверждаете, что ознакомились с условиями и согласны с ними."
     )
+
+
+def support_link(text: str = "@exam_admin") -> str:
+    url = SUPPORT_URL
+    if url.startswith("http") or url.startswith("tg://"):
+        return f'<a href="{html.escape(url, quote=True)}">{text}</a>'
+    return html.escape(url)
 
 
 @dp.message(Command("support"))
 async def cmd_support(message: Message):
     await message.answer(
         "🛟 Поддержка\n\n"
-        "По вопросам работы бота и доступа напишите администратору: "
-        f"{SUPPORT_URL}\n"
-        "По вопросам оплаты — /paysupport."
+        f"По всем вопросам — {support_link()}.",
+        parse_mode="HTML",
     )
 
 
@@ -416,10 +422,10 @@ async def cmd_support(message: Message):
 async def cmd_paysupport(message: Message):
     await message.answer(
         "💳 Поддержка по оплате\n\n"
-        "Если оплата прошла, а доступ не открылся, или нужен возврат — напишите администратору: "
-        f"{SUPPORT_URL}\n\n"
-        "Приложите скриншот чека из Telegram (раздел «Мои звёзды» → история платежей). "
-        "Возврат рассматривается индивидуально и выполняется через refundStarPayment."
+        "Если оплата прошла, а доступ не открылся — "
+        f"{support_link()}.\n\n"
+        "Приложите скриншот чека из Telegram (раздел «Мои звёзды» → история платежей).",
+        parse_mode="HTML",
     )
 
 

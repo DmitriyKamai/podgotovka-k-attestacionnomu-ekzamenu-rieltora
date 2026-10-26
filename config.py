@@ -23,7 +23,7 @@ DEFAULT_PRICE_STARS = 250
 DEFAULT_DEMO_LIMIT = 5
 # Telegram разрешает для звёздных подписок только 30 дней (2592000 секунд).
 SUBSCRIPTION_DAYS = 30
-SUPPORT_URL = os.getenv("SUPPORT_URL", "tg://user?id=7930922924").strip()
+SUPPORT_URL = os.getenv("SUPPORT_URL", "https://t.me/exam_admin").strip()
 
 # Администратор: статистика и диагностика доступны только этому ID.
 ADMIN_ID = 7930922924
