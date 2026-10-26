@@ -11,7 +11,7 @@ HEAD_RE = re.compile(r"(?m)^##\s+(.+?)\s*$")
 PROGRAM_RE = re.compile(r"^\s*(\d+)\.\s*")
 ARTICLE_RE = re.compile(
     r"(?m)^[ \t]*Статья[ \t]+(\d+)"
-    r"(?:[ \t]*-[ \t]*(\d+)[ \t]*\.|[ \t]*\n[ \t]*(\d+)[ \t]*\n[ \t]*\.|[ \t]*\.)"
+    r"(?:[ \t]*-[ \t]*(\d+)[ \t]*\.|[ \t]*\n[ \t]*(\d+)[ \t]*\n[ \t]*\.|[ \t]+(\d{1,2})[ \t]*\.|[ \t]*\.)"
 )
 PARA_RE = re.compile(r"(?m)^\s*(\d{1,3})\.\s+")
 CITED_ART_RE = re.compile(
@@ -88,7 +88,7 @@ def _split_articles(text: str) -> Dict[str, str]:
     for i, m in enumerate(matches):
         end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
         body = text[m.start():end].strip()
-        suffix = m.group(2) or m.group(3)
+        suffix = m.group(2) or m.group(3) or m.group(4)
         num = f"{m.group(1)}-{suffix}" if suffix else m.group(1)
         out.setdefault(num, body[:9000])
     return out
