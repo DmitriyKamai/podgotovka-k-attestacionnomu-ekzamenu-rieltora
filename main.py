@@ -26,9 +26,9 @@ from config import (
     BASE_DIR,
     BOT_TOKEN,
     DATA_DIR,
-    DEMO_LIMIT,
-    PAID_MODE,
-    PRICE_STARS,
+    DEFAULT_DEMO_LIMIT,
+    DEFAULT_PAID_MODE,
+    DEFAULT_PRICE_STARS,
     SUBSCRIPTION_DAYS,
     SUPPORT_URL,
     YANDEX_API_KEY,
@@ -39,10 +39,12 @@ from keyboards import (
     BTN_ASK,
     BTN_DIAG,
     BTN_EXAM,
+    BTN_GRANT,
     BTN_ID,
     BTN_LIST,
     BTN_NEXT,
     BTN_RESET,
+    BTN_SETTINGS,
     BTN_STATS,
     BTN_STOP,
     MENU_TEXTS,
@@ -102,7 +104,25 @@ def session_id(user_id: int) -> str:
 
 # ---------- платный доступ ----------
 
-_invoice_link: str | None = None
+_invoice_cache: dict = {}
+
+
+def paid_mode() -> bool:
+    return db.get_setting("paid_mode", "1" if DEFAULT_PAID_MODE else "0") == "1"
+
+
+def price_stars() -> int:
+    try:
+        return max(1, int(db.get_setting("price_stars", str(DEFAULT_PRICE_STARS))))
+    except ValueError:
+        return DEFAULT_PRICE_STARS
+
+
+def demo_limit() -> int:
+    try:
+        return max(0, int(db.get_setting("demo_limit", str(DEFAULT_DEMO_LIMIT))))
+    except ValueError:
+        return DEFAULT_DEMO_LIMIT
 
 
 def has_access(uid: int) -> bool:
@@ -110,7 +130,7 @@ def has_access(uid: int) -> bool:
 
 
 def demo_left(uid: int) -> int:
-    return max(0, DEMO_LIMIT - db.access(uid)["demo_used"])
+    return max(0, demo_limit() - db.access(uid)["demo_used"])
 
 
 def total_questions() -> int:
@@ -118,37 +138,39 @@ def total_questions() -> int:
 
 
 async def get_invoice_link(bot: Bot) -> str:
-    global _invoice_link
-    if not _invoice_link:
-        _invoice_link = await bot.create_invoice_link(
+    price, days = price_stars(), SUBSCRIPTION_DAYS
+    key = (price, days)
+    if key not in _invoice_cache:
+        _invoice_cache[key] = await bot.create_invoice_link(
             title="Полный доступ к тренажёру риэлтера",
-            description=f"Все {total_questions()} вопросов программы + ответы по НПА + «Спросить по НПА». Подписка {SUBSCRIPTION_DAYS} дней.",
+            description=f"Все {total_questions()} вопросов программы + ответы по НПА + «Спросить по НПА». Подписка {days} дней.",
             payload="sub",
             currency="XTR",
-            prices=[LabeledPrice(label=f"Подписка {SUBSCRIPTION_DAYS} дней", amount=PRICE_STARS)],
-            subscription_period=SUBSCRIPTION_DAYS * 86400,
+            prices=[LabeledPrice(label=f"Подписка {days} дней", amount=price)],
+            subscription_period=days * 86400,
         )
-    return _invoice_link
+    return _invoice_cache[key]
 
 
 async def send_paywall(message: Message, uid: int, need_paid: bool = False):
     link = await get_invoice_link(message.bot)
+    price, days = price_stars(), SUBSCRIPTION_DAYS
     head = "Этот раздел доступен только по подписке." if need_paid else "Бесплатные вопросы закончились."
     await message.answer(
         f"{head}\n\n"
         f"Подписка открывает все {total_questions()} вопросов программы, "
-        f"ответы по НПА и режим «Спросить по НПА» на {SUBSCRIPTION_DAYS} дней.\n"
-        f"Цена — {PRICE_STARS} ⭐. Продлевается автоматически, отменить можно в Telegram → Настройки → Telegram Stars → Подписки.\n"
+        f"ответы по НПА и режим «Спросить по НПА» на {days} дней.\n"
+        f"Цена — {price} ⭐. Продлевается автоматически, отменить можно в Telegram → Настройки → Telegram Stars → Подписки.\n"
         f"Условия: /terms.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text=f"💳 Оплатить {PRICE_STARS} ⭐", url=link)
+            InlineKeyboardButton(text=f"💳 Оплатить {price} ⭐", url=link)
         ]]),
     )
 
 
 async def ensure_access(message: Message, uid: int) -> bool:
     """Допуск к вопросу: демо или подписка."""
-    if not PAID_MODE or has_access(uid):
+    if not paid_mode() or has_access(uid):
         return True
     if demo_left(uid) > 0:
         db.inc_demo(uid)
@@ -159,7 +181,7 @@ async def ensure_access(message: Message, uid: int) -> bool:
 
 async def ensure_paid(message: Message, uid: int) -> bool:
     """Допуск к платным разделам (без демо): «Спросить по НПА»."""
-    if not PAID_MODE or has_access(uid):
+    if not paid_mode() or has_access(uid):
         return True
     await send_paywall(message, uid, need_paid=True)
     return False
@@ -270,15 +292,15 @@ async def cmd_start(message: Message):
         "🔄 Сброс — очистить историю и прогресс\n\n"
         "Можно отвечать текстом или голосовым сообщением."
     )
-    if PAID_MODE:
+    if paid_mode():
         text += (
-            f"\n\n🔒 Бесплатно — первые {DEMO_LIMIT} вопросов. "
-            f"Полный доступ — по подписке {PRICE_STARS} ⭐ / {SUBSCRIPTION_DAYS} дней. "
+            f"\n\n🔒 Бесплатно — первые {demo_limit()} вопросов. "
+            f"Полный доступ — по подписке {price_stars()} ⭐ / {SUBSCRIPTION_DAYS} дней. "
             "«Спросить по НПА» — только по подписке."
         )
         text += "\n\n📄 Условия — /terms, поддержка — /support."
     if is_admin(uid):
-        text += "\n\nАдмин-панель: 📊 Статистика, 🔧 Диагностика."
+        text += "\n\nАдмин-панель: 📊 Статистика, 🔧 Диагностика, ⚙️ Настройки."
     await message.answer(text, reply_markup=menu(uid))
 
 
@@ -288,7 +310,7 @@ async def cmd_terms(message: Message):
         "📄 Условия подписки\n\n"
         f"• Услуга: доступ к тренажёру риэлтера — все {total_questions()} вопросов, проверка ответов и «Спросить по НПА».\n"
         f"• Срок: {SUBSCRIPTION_DAYS} дней с момента оплаты, продлевается автоматически.\n"
-        f"• Цена: {PRICE_STARS} ⭐ за период.\n"
+        f"• Цена: {price_stars()} ⭐ за период.\n"
         "• Отмена: в Telegram → Настройки → Telegram Stars → Подписки (до даты следующего списания).\n"
         "• Возврат: по запросу через /paysupport.\n"
         "• Доступ цифровой, без материального носителя.\n\n"
@@ -363,6 +385,97 @@ async def cmd_grant(message: Message):
         )
         return
     await grant_access(message, parts[1])
+
+
+def settings_view():
+    rows = [
+        [InlineKeyboardButton(text="🔁 Платный режим", callback_data="set:paid")],
+        [
+            InlineKeyboardButton(text="💰 Цена", callback_data="set:price"),
+            InlineKeyboardButton(text="🎁 Демо", callback_data="set:demo"),
+        ],
+        [InlineKeyboardButton(text="✖️ Закрыть", callback_data="close")],
+    ]
+    text = (
+        "⚙️ Настройки\n\n"
+        f"Платный режим: {'включён' if paid_mode() else 'выключен'}\n"
+        f"Цена подписки: {price_stars()} ⭐\n"
+        f"Бесплатных вопросов: {demo_limit()}\n"
+        f"Срок подписки: {SUBSCRIPTION_DAYS} дней (фиксирован Telegram)\n\n"
+        "Нажмите, что изменить:"
+    )
+    return text, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def show_settings(message: Message):
+    text, markup = settings_view()
+    await message.answer(text, reply_markup=markup)
+
+
+@dp.message(Command("settings"))
+async def cmd_settings(message: Message):
+    uid = message.from_user.id
+    if not is_admin(uid):
+        await message.answer("Команда доступна только администратору.")
+        return
+    await show_settings(message)
+
+
+@dp.callback_query(F.data == "set:paid")
+async def cb_set_paid(cb: CallbackQuery):
+    if not is_admin(cb.from_user.id):
+        await cb.answer("Только администратор", show_alert=True)
+        return
+    db.set_setting("paid_mode", "0" if paid_mode() else "1")
+    text, markup = settings_view()
+    try:
+        await cb.message.edit_text(text, reply_markup=markup)
+    except Exception:
+        pass
+    await cb.answer("Переключено")
+
+
+@dp.callback_query(F.data.startswith("set:"))
+async def cb_set_value(cb: CallbackQuery):
+    if not is_admin(cb.from_user.id):
+        await cb.answer("Только администратор", show_alert=True)
+        return
+    key = cb.data.split(":", 1)[1]
+    prompts = {
+        "price": ("setting_price", f"Введите цену подписки в звёздах (сейчас {price_stars()}):"),
+        "demo": ("setting_demo", f"Сколько вопросов давать бесплатно (сейчас {demo_limit()}):"),
+    }
+    if key not in prompts:
+        await cb.answer()
+        return
+    mode, text = prompts[key]
+    db.set_user(cb.from_user.id, mode=mode)
+    try:
+        await cb.message.edit_text(text + "\n\nОтправьте число сообщением.")
+    except Exception:
+        pass
+    await cb.answer()
+
+
+async def save_setting(message: Message, mode: str, text: str):
+    digits = re.sub(r"\D", "", text or "")
+    if not digits:
+        await message.answer("Нужно число. Откройте /settings и попробуйте снова.")
+        return
+    n = int(digits)
+    if mode == "setting_price":
+        if not 1 <= n <= 10000:
+            await message.answer("Цена должна быть от 1 до 10 000 ⭐.")
+            return
+        db.set_setting("price_stars", str(n))
+    else:
+        if not 0 <= n <= 1000:
+            await message.answer("Демо — от 0 до 1000 вопросов.")
+            return
+        db.set_setting("demo_limit", str(n))
+    _invoice_cache.clear()
+    await message.answer("✅ Сохранено.")
+    await show_settings(message)
 
 
 @dp.message(Command("diag"))
@@ -458,7 +571,7 @@ async def send_question(message: Message, uid: int, idx: int):
     num = program_number(q["title"])
     label = f" (п. {num} Программы)" if num is not None else ""
     demo_note = ""
-    if PAID_MODE and not has_access(uid):
+    if paid_mode() and not has_access(uid):
         demo_note = f"\n\n🔒 Бесплатных вопросов осталось: {demo_left(uid)}"
     await send_long(
         message,
@@ -622,6 +735,8 @@ async def on_menu(message: Message):
             "`123456789` — навсегда\n`123456789 30` — на 30 дней",
             reply_markup=menu(uid),
         )
+    elif text == BTN_SETTINGS:
+        await show_settings(message)
 
 
 @dp.message(F.text)
@@ -683,6 +798,10 @@ async def handle_text(message: Message, text: str):
     elif user["mode"] == "grant":
         db.set_user(uid, mode="idle")
         await grant_access(message, text)
+    elif user["mode"] in ("setting_price", "setting_demo"):
+        mode = user["mode"]
+        db.set_user(uid, mode="idle")
+        await save_setting(message, mode, text)
     else:
         await message.answer(
             "Выберите действие кнопками меню или командой /exam.",
@@ -1000,6 +1119,7 @@ async def main():
         BotCommand(command="check", description="🧪 Проверка базы ответов"),
         BotCommand(command="diag", description="🔧 Диагностика базы"),
         BotCommand(command="grant", description="➕ Выдать доступ по ID"),
+        BotCommand(command="settings", description="⚙️ Настройки оплаты"),
         BotCommand(command="id", description="🆔 Мой ID"),
     ]
     await bot.set_my_commands(public_commands)

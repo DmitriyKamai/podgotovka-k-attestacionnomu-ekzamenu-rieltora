@@ -15,11 +15,12 @@ YANDEX_STT_URL = os.getenv(
     "YANDEX_STT_URL", "https://stt.api.cloud.yandex.net/speech/v1/stt:recognize"
 ).strip()
 
-# Платный доступ (Telegram Stars)
-PAID_MODE = os.getenv("PAID_MODE", "1").strip() == "1"
-PRICE_STARS = int(os.getenv("PRICE_STARS", "250"))
-DEMO_LIMIT = int(os.getenv("DEMO_LIMIT", "5"))
-SUBSCRIPTION_DAYS = int(os.getenv("SUBSCRIPTION_DAYS", "30"))
+# Платный доступ: значения по умолчанию. Меняются админом в меню «⚙️ Настройки».
+DEFAULT_PAID_MODE = True
+DEFAULT_PRICE_STARS = 250
+DEFAULT_DEMO_LIMIT = 5
+# Telegram разрешает для звёздных подписок только 30 дней (2592000 секунд).
+SUBSCRIPTION_DAYS = 30
 SUPPORT_URL = os.getenv("SUPPORT_URL", "tg://user?id=7930922924").strip()
 
 # Администратор: статистика и диагностика доступны только этому ID.

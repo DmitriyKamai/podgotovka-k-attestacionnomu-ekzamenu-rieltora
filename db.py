@@ -55,6 +55,12 @@ def init():
                    ts TEXT NOT NULL
                )"""
         )
+        c.execute(
+            """CREATE TABLE IF NOT EXISTS settings (
+                   key TEXT PRIMARY KEY,
+                   value TEXT
+               )"""
+        )
         # миграция: добавляем поля платного доступа, если их ещё нет
         cols = {r[1] for r in c.execute("PRAGMA table_info(users)").fetchall()}
         if "demo_used" not in cols:
@@ -252,5 +258,21 @@ def record_payment(
                 int(until_ts),
                 datetime.utcnow().isoformat(),
             ),
+        )
+
+
+# ---------- настройки ----------
+
+def get_setting(key: str, default: str = "") -> str:
+    with _conn() as c:
+        row = c.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+    return row[0] if row and row[0] is not None else default
+
+
+def set_setting(key: str, value: str):
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO settings(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, str(value)),
         )
 
