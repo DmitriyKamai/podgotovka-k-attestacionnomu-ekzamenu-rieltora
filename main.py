@@ -57,10 +57,15 @@ SYSTEM_EXAM = (
 )
 
 SYSTEM_ASK = (
-    "Ты — помощник по подготовке к аттестационному экзамену риэлтера (Беларусь). "
-    "Отвечай СТРОГО по предоставленному контексту из НПА. Указывай статьи и акты. "
+    "Ты — помощник по подготовке к аттестационному экзамену риэлтера (Республика Беларусь). "
+    "В контексте тебе дают эталонный ответ по Программе (если вопрос из Программы) и полные тексты статей НПА. "
+    "Отвечай ПОЛНО: бери эталонный ответ за основу, дополняй его конкретными нормами из статей, "
+    "называй статьи и акты. Не сокращай ответ до одного абзаца, если вопрос этого требует. "
     "Оформляй аккуратно: короткие абзацы, списки с новой строки, ключевые термины — **жирным**. "
-    "Не используй таблицы. Если в контексте нет ответа — честно скажи, что данных недостаточно. Не выдумывай."
+    "Не используй таблицы. "
+    "НЕ начинай ответ с оговорок и НЕ пиши, что данных недостаточно, если ответ можно собрать из контекста. "
+    "Если чего-то действительно нет в контексте — одной короткой строкой в конце укажи, что стоит уточнить. "
+    "Не выдумывай нормы, которых нет в контексте."
 )
 
 
@@ -197,6 +202,31 @@ async def cmd_diag(message: Message):
     except Exception as e:
         lines.append(f"files: error {e}")
     await message.answer("\n".join(lines))
+
+
+@dp.message(Command("check"))
+async def cmd_check(message: Message):
+    uid = message.from_user.id
+    if not is_admin(uid):
+        await message.answer("Команда доступна только администратору.")
+        return
+    if not kb:
+        await message.answer("База не загружена.")
+        return
+    issues = kb.check()
+    lines = [
+        "🧪 Проверка базы ответов",
+        f"вопросов: {len(kb.questions)}",
+        f"фрагментов НПА: {len(kb.docs)}",
+        f"статей: {sum(len(v) for v in kb.articles.values())}",
+        "",
+    ]
+    if issues:
+        lines.append(f"Замечаний: {len(issues)}")
+        lines += [f"• {x}" for x in issues]
+    else:
+        lines.append("Замечаний нет — все ответы на месте.")
+    await send_long(message, "\n".join(lines))
 
 
 @dp.message(Command("stats"))
@@ -498,18 +528,17 @@ async def grade_answer(message: Message, answer: str, idx: int):
 
 async def answer_ask(message: Message, question: str):
     uid = message.from_user.id
-    chunks = kb.search(question, k=6) if kb else []
-    if not chunks:
+    context = kb.build_context(question) if kb else ""
+    if not context:
         await message.answer("Не нашёл информации в базе. Уточните вопрос.")
         return
-    context = "\n\n---\n\n".join(f"[{c['source']}]\n{c['text']}" for c in chunks)
-    user_msg = f"КОНТЕКСТ ИЗ НПА:\n{context}\n\nВОПРОС:\n{question}"
+    user_msg = f"КОНТЕКСТ (эталонный ответ и НПА):\n{context}\n\nВОПРОС:\n{question}"
     try:
         await message.answer("Ищу по НПА…")
         result = await chat(
             [{"role": "system", "content": SYSTEM_ASK}, {"role": "user", "content": user_msg}],
             session_id=session_id(uid),
-            max_tokens=3000,
+            max_tokens=3500,
         )
         db.add_history(uid, "user", question)
         db.add_history(uid, "assistant", result)
@@ -678,6 +707,7 @@ async def main():
     ]
     admin_commands = public_commands + [
         BotCommand(command="stats", description="📊 Статистика ответов"),
+        BotCommand(command="check", description="🧪 Проверка базы ответов"),
         BotCommand(command="diag", description="🔧 Диагностика базы"),
         BotCommand(command="id", description="🆔 Мой ID"),
     ]
