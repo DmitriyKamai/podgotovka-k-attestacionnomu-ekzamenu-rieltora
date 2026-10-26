@@ -5,6 +5,7 @@ import logging
 import os
 import random
 import re
+import shutil
 import sys
 import time
 
@@ -80,8 +81,9 @@ SYSTEM_EXAM = (
     "При оценке 2 и ниже строку '💬' НЕ добавляй. Затем — разбор строго так, с пустой строкой между разделами:\n"
     "1) ✅ **Что верно**\n- ...\n\n"
     "2) ⚠️ **Что неточно или упущено**\n- ...\n\n"
-    "3) 📖 **Краткий эталон**\n...\n\n"
+    "3) 📖 **Краткий эталон**\n— пункт\n— пункт\n\n"
     "4) **Оценка: N/5** (зачёт — 4–5)\n"
+    "В разделе 3 — 4–7 отдельных пунктов, каждый с новой строки и с «— »; не писать сплошным абзацем. "
     "Каждый пункт — с новой строки. Не используй таблицы. "
     "Не выдумывай нормы, которых нет в эталоне. Пиши по-русски, кратко и по делу."
 )
@@ -187,6 +189,35 @@ def split_reaction(text: str) -> tuple[str, str]:
     reaction = m.group(1).strip()
     cleaned = (text[:m.start()] + text[m.end():]).strip()
     return reaction, cleaned
+
+
+ETALON_RE = re.compile(
+    r"(?s)(3\)\s*📖\s*(?:\*\*)?Краткий эталон(?:\*\*)?)\s*(.*?)(?=\n\s*4\)\s*(?:\*\*)?Оценка|\Z)"
+)
+
+
+def structure_etalon(text: str) -> str:
+    """Приводит раздел «Краткий эталон» к пунктам, если модель выдала сплошной абзац."""
+    text = text or ""
+    m = ETALON_RE.search(text)
+    if not m:
+        return text
+    body = m.group(2).strip()
+    lines = [l.strip() for l in body.split("\n") if l.strip()]
+    bullets = [l for l in lines if l.startswith(("-", "—", "•", "*"))]
+    if len(bullets) >= 3:
+        return text
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+(?=[А-ЯЁA-Z])", body) if s.strip()]
+    if len(sentences) < 2:
+        return text
+    items = []
+    for s in sentences:
+        if items and len(s) < 45:
+            items[-1] = (items[-1] + " " + s).strip()
+        else:
+            items.append(s)
+    new_body = "\n".join(f"— {it}" for it in items)
+    return text[:m.start(2)] + "\n" + new_body + "\n" + text[m.end(2):]
 
 
 async def get_invoice_link(bot: Bot) -> str:
@@ -580,8 +611,57 @@ async def cmd_backup(message: Message):
         caption=(
             f"💾 Резервная копия базы\n"
             f"пользователей: {db.count_users()} · ответов: {db.count_answers()}\n\n"
-            "Сохраните файл. Восстановление: положить его на сервер по пути DB_PATH и перезапустить бота."
+            "Чтобы восстановить — пришлите этот файл боту (или /restore)."
         ),
+    )
+
+
+@dp.message(Command("restore"))
+async def cmd_restore(message: Message):
+    uid = message.from_user.id
+    if not is_admin(uid):
+        await message.answer("Команда доступна только администратору.")
+        return
+    await message.answer(
+        "Пришлите файл базы (.sqlite3), сохранённый через /backup.\n"
+        "Текущая база будет сохранена рядом как .bak."
+    )
+
+
+@dp.message(F.document)
+async def on_document(message: Message):
+    uid = message.from_user.id
+    if not is_admin(uid):
+        return
+    doc = message.document
+    name = (doc.file_name or "").lower()
+    if not (name.endswith(".sqlite3") or name.endswith(".db")):
+        await message.answer("Нужен файл .sqlite3 (его присылает /backup).")
+        return
+    buf = io.BytesIO()
+    try:
+        await message.bot.download(doc, destination=buf)
+    except Exception:
+        await message.answer("Не удалось скачать файл.")
+        return
+    data = buf.getvalue()
+    if not data.startswith(b"SQLite format 3\x00"):
+        await message.answer("Это не файл SQLite.")
+        return
+    try:
+        if os.path.isfile(DB_PATH):
+            shutil.copy2(DB_PATH, DB_PATH + ".bak")
+        tmp = DB_PATH + ".upload"
+        with open(tmp, "wb") as f:
+            f.write(data)
+        os.replace(tmp, DB_PATH)
+        db.init()
+    except Exception as e:
+        await message.answer(f"Ошибка восстановления: {e}")
+        return
+    await message.answer(
+        "✅ База восстановлена.\n"
+        f"Пользователей: {db.count_users()} · ответов: {db.count_answers()}"
     )
 
 
@@ -949,9 +1029,10 @@ async def grade_answer(message: Message, answer: str, idx: int):
         result = await chat(
             [{"role": "system", "content": SYSTEM_EXAM}, {"role": "user", "content": user_msg}],
             session_id=session_id(uid),
-            max_tokens=3000,
+            max_tokens=4000,
         )
         reaction, cleaned = split_reaction(result)
+        cleaned = structure_etalon(cleaned)
         score = extract_score(cleaned)
         db.add_history(uid, "user", answer)
         db.add_history(uid, "assistant", cleaned)
@@ -1252,6 +1333,7 @@ async def main():
         BotCommand(command="grant", description="➕ Выдать доступ по ID"),
         BotCommand(command="settings", description="⚙️ Настройки оплаты"),
         BotCommand(command="backup", description="💾 Скачать базу"),
+        BotCommand(command="restore", description="♻️ Восстановить базу из файла"),
         BotCommand(command="id", description="🆔 Мой ID"),
     ]
     await bot.set_my_commands(public_commands)
