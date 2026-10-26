@@ -1,4 +1,5 @@
 import asyncio
+import html
 import io
 import logging
 import os
@@ -66,7 +67,11 @@ kb: KnowledgeBase | None = None
 SYSTEM_EXAM = (
     "Ты — член экзаменационной комиссии по аттестации риэлтеров (Республика Беларусь). "
     "Тебе дают вопрос, эталонный ответ и ответ претендента. Проверяй ПО СМЫСЛУ, не требуя дословного совпадения. "
-    "Оформляй ответ строго так, с пустой строкой между разделами:\n"
+    "Сначала мысленно определи оценку. Если оценка 3 или выше — начни ответ ОДНОЙ строкой реакции: "
+    "'💬 ' и до 140 знаков. Реакция должна опираться на конкретику этого ответа: что именно получилось "
+    "(названная норма, термин, структура) или чего не хватило до более высокой оценки. "
+    "Без общих похвал, лести, восторженных слов и восклицательных знаков; спокойный, рабочий тон. "
+    "При оценке 2 и ниже строку '💬' НЕ добавляй. Затем — разбор строго так, с пустой строкой между разделами:\n"
     "1) ✅ **Что верно**\n- ...\n\n"
     "2) ⚠️ **Что неточно или упущено**\n- ...\n\n"
     "3) 📖 **Краткий эталон**\n...\n\n"
@@ -162,6 +167,20 @@ def praise_line(score: int | None) -> str:
     if score and score >= 3:
         return random.choice(PRAISE.get(score, []))
     return ""
+
+
+REACTION_RE = re.compile(r"(?m)^\s*(?:\*\*)?💬(?:\*\*)?\s*(.+?)\s*$")
+
+
+def split_reaction(text: str) -> tuple[str, str]:
+    """Отделяет сгенерированную строку-реакцию '💬 …' от разбора."""
+    text = text or ""
+    m = REACTION_RE.search(text)
+    if not m:
+        return "", text
+    reaction = m.group(1).strip()
+    cleaned = (text[:m.start()] + text[m.end():]).strip()
+    return reaction, cleaned
 
 
 async def get_invoice_link(bot: Bot) -> str:
@@ -897,9 +916,10 @@ async def grade_answer(message: Message, answer: str, idx: int):
             session_id=session_id(uid),
             max_tokens=3000,
         )
+        reaction, cleaned = split_reaction(result)
+        score = extract_score(cleaned)
         db.add_history(uid, "user", answer)
-        db.add_history(uid, "assistant", result)
-        score = extract_score(result)
+        db.add_history(uid, "assistant", cleaned)
         db.record_answer(
             uid,
             message.from_user.username,
@@ -908,10 +928,10 @@ async def grade_answer(message: Message, answer: str, idx: int):
             q["title"],
             score,
         )
-        html = md_to_html(result)
-        praise = praise_line(score)
-        if praise:
-            html = f"{praise}\n\n{html}"
+        html = md_to_html(cleaned)
+        if score and score >= 3:
+            line = html.escape(reaction or praise_line(score))
+            html = f"{line}\n\n{html}"
         await send_long(
             message,
             html,
