@@ -655,6 +655,34 @@ async def cmd_diag(message: Message):
     await message.answer("\n".join(lines))
 
 
+@dp.message(Command("stars"))
+async def cmd_stars(message: Message):
+    uid = message.from_user.id
+    if not is_admin(uid):
+        await message.answer("Команда доступна только администратору.")
+        return
+    try:
+        res = await message.bot.get_star_transactions(limit=50)
+    except Exception as e:
+        await message.answer(f"Не удалось получить операции: {e}")
+        return
+    lines = ["⭐ Операции бота (последние 50):", ""]
+    incoming = 0
+    for t in res.transactions:
+        when = time.strftime("%d.%m.%Y %H:%M", time.localtime(t.date))
+        user = getattr(t.source, "user", None)
+        if user is not None:
+            who = f" — @{user.username}" if user.username else f" — ID {user.id}"
+        else:
+            who = ""
+        incoming += max(0, t.amount)
+        lines.append(f"{when}  {t.amount:+d} ⭐{who}")
+    lines.append("")
+    lines.append(f"Поступления в выборке: {incoming} ⭐")
+    lines.append("Баланс и вывод — в профиле бота (карандаш → «Баланс») или на Fragment.")
+    await send_long(message, "\n".join(lines))
+
+
 @dp.message(Command("backup"))
 async def cmd_backup(message: Message):
     uid = message.from_user.id
@@ -1394,6 +1422,7 @@ async def main():
         BotCommand(command="diag", description="🔧 Диагностика базы"),
         BotCommand(command="grant", description="➕ Выдать доступ по ID"),
         BotCommand(command="settings", description="⚙️ Настройки оплаты"),
+        BotCommand(command="stars", description="⭐ Операции в звёздах"),
         BotCommand(command="backup", description="💾 Скачать базу"),
         BotCommand(command="restore", description="♻️ Восстановить базу из файла"),
         BotCommand(command="id", description="🆔 Мой ID"),
