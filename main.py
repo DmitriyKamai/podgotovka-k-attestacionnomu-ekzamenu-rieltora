@@ -427,8 +427,11 @@ async def cmd_start(message: Message):
         "⏹ Закончить — выйти из режима экзамена\n"
         "🔄 Сброс — очистить историю и прогресс\n"
         "💳 Подписка — купить или проверить доступ\n\n"
-        "Можно отвечать текстом или голосовым сообщением."
     )
+    if YANDEX_API_KEY:
+        text += "🎤 Можно отвечать голосовым сообщением — просто запишите голосовое вместо текста."
+    else:
+        text += "Можно отвечать текстом."
     if paid_mode():
         text += (
             f"\n\n🔒 Бесплатно — первые {demo_limit()} вопросов. "
@@ -862,9 +865,10 @@ async def send_question(message: Message, uid: int, idx: int):
     demo_note = ""
     if paid_mode() and not has_access(uid):
         demo_note = f"\n\n🔒 Бесплатных вопросов осталось: {demo_left(uid)}"
+    voice_note = " Можно текстом или голосовым 🎤." if YANDEX_API_KEY else ""
     await send_long(
         message,
-        f"Вопрос {idx + 1} из {len(kb.questions)}\n\n{q['title']}\n\nЖду ваш ответ.{demo_note}",
+        f"Вопрос {idx + 1} из {len(kb.questions)}\n\n{q['title']}\n\nЖду ваш ответ.{voice_note}{demo_note}",
         reply_markup=menu(uid),
     )
 

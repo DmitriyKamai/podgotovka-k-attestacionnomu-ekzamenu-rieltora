@@ -40,7 +40,7 @@ def main_menu(admin: bool = False) -> ReplyKeyboardMarkup:
         keyboard=rows,
         resize_keyboard=True,
         is_persistent=True,
-        input_field_placeholder="Выберите действие или напишите ответ",
+        input_field_placeholder="Ответьте текстом или голосовым 🎤",
     )
 
 
