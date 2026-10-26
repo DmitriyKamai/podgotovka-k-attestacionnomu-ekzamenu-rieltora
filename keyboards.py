@@ -16,10 +16,11 @@ BTN_STATS = "📊 Статистика"
 BTN_DIAG = "🔧 Диагностика"
 BTN_GRANT = "➕ Выдать доступ"
 BTN_SETTINGS = "⚙️ Настройки"
+BTN_USERS = "👥 Пользователи"
 
 MENU_TEXTS = {
     BTN_EXAM, BTN_LIST, BTN_NEXT, BTN_ASK, BTN_STOP, BTN_RESET,
-    BTN_ID, BTN_STATS, BTN_DIAG, BTN_GRANT, BTN_SETTINGS,
+    BTN_ID, BTN_STATS, BTN_DIAG, BTN_GRANT, BTN_SETTINGS, BTN_USERS,
 }
 
 
@@ -30,9 +31,9 @@ def main_menu(admin: bool = False) -> ReplyKeyboardMarkup:
         [KeyboardButton(text=BTN_STOP), KeyboardButton(text=BTN_RESET)],
     ]
     if admin:
-        rows.append([KeyboardButton(text=BTN_STATS), KeyboardButton(text=BTN_DIAG)])
+        rows.append([KeyboardButton(text=BTN_STATS), KeyboardButton(text=BTN_USERS)])
         rows.append([KeyboardButton(text=BTN_GRANT), KeyboardButton(text=BTN_SETTINGS)])
-        rows.append([KeyboardButton(text=BTN_ID)])
+        rows.append([KeyboardButton(text=BTN_DIAG), KeyboardButton(text=BTN_ID)])
     return ReplyKeyboardMarkup(
         keyboard=rows,
         resize_keyboard=True,

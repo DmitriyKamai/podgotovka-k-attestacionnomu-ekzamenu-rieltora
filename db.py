@@ -276,3 +276,41 @@ def set_setting(key: str, value: str):
             (key, str(value)),
         )
 
+
+def users_overview(limit: int = 200) -> List[Dict]:
+    """Список пользователей: доступ, демо, число ответов и средний балл."""
+    with _conn() as c:
+        rows = c.execute(
+            """WITH ids AS (
+                   SELECT user_id FROM users
+                   UNION
+                   SELECT user_id FROM answers
+               )
+               SELECT ids.user_id,
+                      u.demo_used, u.paid_until, u.granted,
+                      COUNT(a.id) AS cnt,
+                      AVG(a.score) AS avg_score,
+                      MAX(a.username) AS username,
+                      MAX(a.first_name) AS first_name
+               FROM ids
+               LEFT JOIN users u ON u.user_id = ids.user_id
+               LEFT JOIN answers a ON a.user_id = ids.user_id
+               GROUP BY ids.user_id
+               ORDER BY cnt DESC, ids.user_id
+               LIMIT ?""",
+            (limit,),
+        ).fetchall()
+    return [
+        {
+            "user_id": r[0],
+            "demo_used": r[1] or 0,
+            "paid_until": r[2],
+            "granted": r[3] or 0,
+            "count": r[4] or 0,
+            "avg": r[5],
+            "username": r[6],
+            "first_name": r[7],
+        }
+        for r in rows
+    ]
+

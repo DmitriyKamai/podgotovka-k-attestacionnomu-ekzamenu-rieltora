@@ -2,6 +2,7 @@ import asyncio
 import io
 import logging
 import os
+import random
 import re
 import sys
 import time
@@ -47,6 +48,7 @@ from keyboards import (
     BTN_SETTINGS,
     BTN_STATS,
     BTN_STOP,
+    BTN_USERS,
     MENU_TEXTS,
     after_answer,
     main_menu,
@@ -135,6 +137,31 @@ def demo_left(uid: int) -> int:
 
 def total_questions() -> int:
     return len(kb.questions) if kb else 192
+
+
+PRAISE = {
+    5: [
+        "Сильный ответ — тема разобрана по существу, а не по верхам.",
+        "Уверенно и точно: видно понимание норм, а не заучивание.",
+        "Такой ответ и на экзамене прозвучит убедительно.",
+    ],
+    4: [
+        "Крепкий ответ: основное на месте, не хватило пары деталей.",
+        "Логика верная, до полного ответа — один шаг.",
+        "Хорошо: суть поймана, осталось отшлифовать формулировки.",
+    ],
+    3: [
+        "Основа есть, но формулировки пока приблизительные — стоит повторить.",
+        "Зачёт на грани: главное уловили, детали просядут.",
+        "Три из пяти — двигаетесь верно, но к этой теме лучше вернуться.",
+    ],
+}
+
+
+def praise_line(score: int | None) -> str:
+    if score and score >= 3:
+        return random.choice(PRAISE.get(score, []))
+    return ""
 
 
 async def get_invoice_link(bot: Bot) -> str:
@@ -281,6 +308,7 @@ async def cmd_start(message: Message):
             "Передайте его администратору, чтобы вас добавили в белый список."
         )
         return
+    db.set_user(uid, mode="idle")
     text = (
         "Бот для подготовки к аттестационному экзамену риэлтера.\n\n"
         "Пользуйтесь кнопками меню внизу или командами:\n"
@@ -526,6 +554,46 @@ async def cmd_check(message: Message):
     await send_long(message, "\n".join(lines))
 
 
+def format_access(row) -> str:
+    uid = row["user_id"]
+    if is_admin(uid):
+        return "админ"
+    if row["granted"]:
+        return "бесплатно (навсегда)"
+    pu = row["paid_until"]
+    if pu and pu > time.time():
+        days = max(1, int((pu - time.time() + 86399) // 86400))
+        return f"платно, {days} дн."
+    return f"демо {row['demo_used']}/{demo_limit()}"
+
+
+def users_text(rows) -> str:
+    lines = [f"👥 Пользователи ({len(rows)}):", ""]
+    for i, r in enumerate(rows, 1):
+        if r["username"]:
+            name = f"@{r['username']}"
+        elif r["first_name"]:
+            name = r["first_name"]
+        else:
+            name = f"ID {r['user_id']}"
+        avg = f"{r['avg']:.1f}" if r["avg"] is not None else "—"
+        lines.append(f"{i}. {name} — {format_access(r)} · {r['count']} отв., ср. {avg}")
+    return "\n".join(lines)
+
+
+@dp.message(Command("users"))
+async def cmd_users(message: Message):
+    uid = message.from_user.id
+    if not is_admin(uid):
+        await message.answer("Команда доступна только администратору.")
+        return
+    rows = db.users_overview()
+    if not rows:
+        await message.answer("Пользователей пока нет.")
+        return
+    await send_long(message, users_text(rows))
+
+
 @dp.message(Command("stats"))
 async def cmd_stats(message: Message):
     uid = message.from_user.id
@@ -724,6 +792,8 @@ async def on_menu(message: Message):
         await message.answer("Сбросить историю и прогресс?", reply_markup=reset_confirm())
     elif text == BTN_STATS:
         await cmd_stats(message)
+    elif text == BTN_USERS:
+        await cmd_users(message)
     elif text == BTN_DIAG:
         await cmd_diag(message)
     elif text == BTN_ID:
@@ -829,17 +899,22 @@ async def grade_answer(message: Message, answer: str, idx: int):
         )
         db.add_history(uid, "user", answer)
         db.add_history(uid, "assistant", result)
+        score = extract_score(result)
         db.record_answer(
             uid,
             message.from_user.username,
             message.from_user.full_name,
             idx,
             q["title"],
-            extract_score(result),
+            score,
         )
+        html = md_to_html(result)
+        praise = praise_line(score)
+        if praise:
+            html = f"{praise}\n\n{html}"
         await send_long(
             message,
-            md_to_html(result),
+            html,
             reply_markup=after_answer(),
             parse_mode="HTML",
         )
@@ -1116,6 +1191,7 @@ async def main():
     ]
     admin_commands = public_commands + [
         BotCommand(command="stats", description="📊 Статистика ответов"),
+        BotCommand(command="users", description="👥 Пользователи и доступ"),
         BotCommand(command="check", description="🧪 Проверка базы ответов"),
         BotCommand(command="diag", description="🔧 Диагностика базы"),
         BotCommand(command="grant", description="➕ Выдать доступ по ID"),
