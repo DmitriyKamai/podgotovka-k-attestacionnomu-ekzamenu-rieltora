@@ -52,6 +52,7 @@ from keyboards import (
     BTN_SETTINGS,
     BTN_STATS,
     BTN_STOP,
+    BTN_SUBSCRIBE,
     BTN_USERS,
     MENU_TEXTS,
     after_answer,
@@ -236,7 +237,14 @@ async def get_invoice_link(bot: Bot) -> str:
 
 
 async def send_paywall(message: Message, uid: int, need_paid: bool = False):
-    link = await get_invoice_link(message.bot)
+    try:
+        link = await get_invoice_link(message.bot)
+    except Exception:
+        log.exception("invoice link failed")
+        await message.answer(
+            "Оплата сейчас недоступна. Напишите @exam_admin."
+        )
+        return
     price, days = price_stars(), SUBSCRIPTION_DAYS
     head = "Этот раздел доступен только по подписке." if need_paid else "Бесплатные вопросы закончились."
     await message.answer(
@@ -268,6 +276,50 @@ async def ensure_paid(message: Message, uid: int) -> bool:
         return True
     await send_paywall(message, uid, need_paid=True)
     return False
+
+
+async def show_subscription(message: Message, uid: int):
+    if not paid_mode():
+        await message.answer("Сейчас платный режим отключён — все вопросы доступны бесплатно.")
+        return
+    if is_admin(uid):
+        await message.answer("Вы администратор — полный доступ уже есть, оплата не нужна.")
+        return
+    a = db.access(uid)
+    if a["granted"]:
+        await message.answer("У вас доступ, выданный администратором. Оплата не нужна.")
+        return
+    if a["paid_until"] and a["paid_until"] > time.time():
+        exp = time.strftime("%d.%m.%Y", time.localtime(a["paid_until"]))
+        await message.answer(
+            f"✅ Подписка активна до {exp}.\n"
+            "Продлевается автоматически. Отменить можно в Telegram → Настройки → Telegram Stars → Подписки."
+        )
+        return
+    try:
+        link = await get_invoice_link(message.bot)
+    except Exception:
+        log.exception("invoice link failed")
+        await message.answer("Оплата сейчас недоступна. Напишите @exam_admin.")
+        return
+    left = demo_left(uid)
+    demo_note = f"Бесплатных вопросов осталось: {left}.\n\n" if left > 0 else ""
+    await message.answer(
+        f"{demo_note}Подписка на {SUBSCRIPTION_DAYS} дней — {price_stars()} ⭐.\n"
+        "Открывает все вопросы программы, проверку ответов и «Спросить по НПА».",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text=f"💳 Оплатить {price_stars()} ⭐", url=link)
+        ]]),
+    )
+
+
+@dp.message(Command("subscribe"))
+async def cmd_subscribe(message: Message):
+    uid = message.from_user.id
+    if not allowed(uid):
+        await message.answer(f"Доступ не выдан. Ваш ID: {uid}")
+        return
+    await show_subscription(message, uid)
 
 
 async def send_long(message: Message, text: str, reply_markup=None, parse_mode: str | None = None):
@@ -373,7 +425,8 @@ async def cmd_start(message: Message):
         "➡️ Следующий — следующий вопрос\n"
         "❓ Спросить по НПА — вопрос по законодательству\n"
         "⏹ Закончить — выйти из режима экзамена\n"
-        "🔄 Сброс — очистить историю и прогресс\n\n"
+        "🔄 Сброс — очистить историю и прогресс\n"
+        "💳 Подписка — купить или проверить доступ\n\n"
         "Можно отвечать текстом или голосовым сообщением."
     )
     if paid_mode():
@@ -930,6 +983,8 @@ async def on_menu(message: Message):
         await cmd_stop(message)
     elif text == BTN_RESET:
         await message.answer("Сбросить историю и прогресс?", reply_markup=reset_confirm())
+    elif text == BTN_SUBSCRIBE:
+        await show_subscription(message, uid)
     elif text == BTN_STATS:
         await cmd_stats(message)
     elif text == BTN_USERS:
@@ -1327,6 +1382,7 @@ async def main():
         BotCommand(command="ask", description="❓ Спросить по НПА"),
         BotCommand(command="stop", description="⏹ Закончить экзамен"),
         BotCommand(command="reset", description="🔄 Сбросить прогресс"),
+        BotCommand(command="subscribe", description="💳 Подписка"),
         BotCommand(command="terms", description="📄 Условия подписки"),
         BotCommand(command="support", description="🛟 Поддержка"),
         BotCommand(command="paysupport", description="💳 Поддержка по оплате"),
