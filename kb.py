@@ -98,7 +98,8 @@ def _split_articles(text: str) -> Dict[str, str]:
         body = text[m.start():end].strip()
         suffix = m.group(2) or m.group(3)
         num = f"{m.group(1)}-{suffix}" if suffix else m.group(1)
-        out.setdefault(num, body[:9000])
+        # перезапись (последнее вхождение): в файлах с оглавлением реальное тело статьи идёт после ТОС
+        out[num] = body[:9000]
     return out
 
 
