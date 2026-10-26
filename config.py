@@ -1,4 +1,6 @@
 import os
+import shutil
+
 from dotenv import load_dotenv
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -68,6 +70,28 @@ if not DATA_DIR:
         (p for p in _candidates if p and os.path.isdir(p)),
         os.path.join(BASE_DIR, "knowledge"),
     )
-DB_PATH = os.getenv("DB_PATH", os.path.join(BASE_DIR, "bot.sqlite3"))
+def _resolve_db_path() -> str:
+    """База — в папке storage внутри проекта (вне Git)."""
+    folder = os.path.join(BASE_DIR, "storage")
+    path = os.path.join(folder, "bot.sqlite3")
+    try:
+        os.makedirs(folder, exist_ok=True)
+    except Exception:
+        return os.path.join(BASE_DIR, "bot.sqlite3")
+    # переносим старую базу при первом запуске
+    for old in (
+        os.path.join(BASE_DIR, "bot.sqlite3"),
+        os.path.join(os.path.expanduser("~"), ".exam-bot", "bot.sqlite3"),
+    ):
+        if os.path.isfile(old) and not os.path.isfile(path):
+            try:
+                shutil.copy2(old, path)
+                break
+            except Exception:
+                pass
+    return path
+
+
+DB_PATH = _resolve_db_path()
 MAX_HISTORY = int(os.getenv("MAX_HISTORY", "8"))
 USER_AGENT = os.getenv("USER_AGENT", "exam-prep-bot/1.0")
