@@ -1,3 +1,4 @@
+import json
 import os
 import re
 from typing import Dict, List, Tuple
@@ -127,6 +128,51 @@ class KnowledgeBase:
         self._load_questions()
         self._load_docs()
         self._build_index()
+        self.sections = self._load_sections()
+
+    def _load_sections(self) -> List[Dict]:
+        path = os.path.join(self.data_dir, "sections.json")
+        if os.path.isfile(path):
+            try:
+                data = json.load(open(path, encoding="utf-8"))
+                if data:
+                    print(f"[KB] sections: {len(data)}", flush=True)
+                    return data
+            except Exception as e:
+                print(f"[KB] sections.json error: {e}", flush=True)
+        return [
+            {
+                "n": 1,
+                "title": "Все вопросы",
+                "short": "Все вопросы",
+                "from": 1,
+                "to": len(self.questions),
+            }
+        ]
+
+    def section_questions(self, sec_index: int) -> List[int]:
+        """Индексы вопросов, входящих в раздел."""
+        if not (0 <= sec_index < len(self.sections)):
+            return []
+        sec = self.sections[sec_index]
+        out = []
+        for i, q in enumerate(self.questions):
+            m = PROGRAM_RE.match(q["title"])
+            if m and sec["from"] <= int(m.group(1)) <= sec["to"]:
+                out.append(i)
+        return out
+
+    def section_of(self, q_index: int) -> int:
+        """Номер раздела для вопроса."""
+        if not (0 <= q_index < len(self.questions)):
+            return 0
+        m = PROGRAM_RE.match(self.questions[q_index]["title"])
+        if m:
+            num = int(m.group(1))
+            for i, sec in enumerate(self.sections):
+                if sec["from"] <= num <= sec["to"]:
+                    return i
+        return 0
 
     # ---------- загрузка ----------
 

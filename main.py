@@ -120,31 +120,54 @@ def find_program_index(num: int) -> int | None:
     return None
 
 
-def questions_page(page: int = 0, per_page: int = 6):
-    total = len(kb.questions) if kb else 0
+def sections_page():
+    total = len(kb.sections) if kb else 0
+    rows = []
+    for i, sec in enumerate(kb.sections):
+        cnt = len(kb.section_questions(i))
+        rows.append([
+            InlineKeyboardButton(text=f'{sec["short"]} · {cnt}', callback_data=f"sec:{i}")
+        ])
+    rows.append([InlineKeyboardButton(text="🔢 По номеру", callback_data="pick")])
+    rows.append([InlineKeyboardButton(text="✖️ Закрыть", callback_data="close")])
+    return (
+        f"📚 Выберите раздел Программы ({total}):",
+        InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+
+
+def questions_page(sec_index: int, page: int = 0, per_page: int = 6):
+    idxs = kb.section_questions(sec_index) if kb else []
+    total = len(idxs)
     pages = max(1, (total + per_page - 1) // per_page)
     page = max(0, min(page, pages - 1))
     start = page * per_page
     rows = []
-    for i in range(start, min(start + per_page, total)):
+    for i in idxs[start:start + per_page]:
         title = kb.questions[i]["title"]
         num = program_number(title)
         label = f"{num}. {short_title(title)}" if num is not None else f"• {short_title(title)}"
-        rows.append([
-            InlineKeyboardButton(text=label, callback_data=f"q:{i}")
-        ])
+        rows.append([InlineKeyboardButton(text=label, callback_data=f"q:{i}")])
     nav = []
-    if page > 0:
-        nav.append(InlineKeyboardButton(text="⏮", callback_data="page:0"))
-        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"page:{page - 1}"))
-    nav.append(InlineKeyboardButton(text=f"{page + 1}/{pages}", callback_data="noop"))
-    if page < pages - 1:
-        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"page:{page + 1}"))
-        nav.append(InlineKeyboardButton(text="⏭", callback_data=f"page:{pages - 1}"))
-    rows.append(nav)
+    if pages > 1:
+        if page > 0:
+            nav.append(InlineKeyboardButton(text="⏮", callback_data=f"page:{sec_index}:0"))
+            nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"page:{sec_index}:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{pages}", callback_data="noop"))
+        if page < pages - 1:
+            nav.append(InlineKeyboardButton(text="➡️", callback_data=f"page:{sec_index}:{page + 1}"))
+            nav.append(InlineKeyboardButton(text="⏭", callback_data=f"page:{sec_index}:{pages - 1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton(text="⬅️ Разделы", callback_data="secs")])
     rows.append([InlineKeyboardButton(text="🔢 По номеру", callback_data="pick")])
     rows.append([InlineKeyboardButton(text="✖️ Закрыть", callback_data="close")])
-    return f"📋 Выберите вопрос ({page + 1} из {pages}):", InlineKeyboardMarkup(inline_keyboard=rows)
+    sec_title = kb.sections[sec_index]["title"] if kb else ""
+    last = min(start + per_page, total)
+    return (
+        f"📂 {sec_title}\nВопросы {start + 1}–{last} из {total}:",
+        InlineKeyboardMarkup(inline_keyboard=rows),
+    )
 
 
 @dp.message(CommandStart())
@@ -160,7 +183,7 @@ async def cmd_start(message: Message):
         "Бот для подготовки к аттестационному экзамену риэлтера.\n\n"
         "Пользуйтесь кнопками меню внизу или командами:\n"
         "🎓 Экзамен — вопрос → ваш ответ → проверка\n"
-        "📋 Выбрать вопрос — список всех вопросов\n"
+        "📋 Выбрать вопрос — раздел → вопрос\n"
         "➡️ Следующий — следующий вопрос\n"
         "❓ Спросить по НПА — вопрос по законодательству\n"
         "⏹ Закончить — выйти из режима экзамена\n"
@@ -354,7 +377,7 @@ async def cmd_list(message: Message):
     if not kb or not kb.questions:
         await message.answer("База вопросов не загружена. Проверьте папку knowledge или отправьте /diag.")
         return
-    text, markup = questions_page(0)
+    text, markup = sections_page()
     await message.answer(text, reply_markup=markup)
 
 
@@ -548,6 +571,46 @@ async def answer_ask(message: Message, question: str):
         await message.answer(f"Ошибка модели: {e}")
 
 
+@dp.callback_query(F.data.startswith("sec:"))
+async def cb_section(cb: CallbackQuery):
+    if not allowed(cb.from_user.id):
+        await cb.answer("Доступ не выдан", show_alert=True)
+        return
+    if not kb or not kb.questions:
+        await cb.answer("База вопросов не загружена", show_alert=True)
+        return
+    try:
+        sec = int(cb.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await cb.answer()
+        return
+    if not 0 <= sec < len(kb.sections):
+        await cb.answer("Раздел не найден", show_alert=True)
+        return
+    text, markup = questions_page(sec, 0)
+    try:
+        await cb.message.edit_text(text, reply_markup=markup)
+    except Exception:
+        pass
+    await cb.answer()
+
+
+@dp.callback_query(F.data == "secs")
+async def cb_sections(cb: CallbackQuery):
+    if not allowed(cb.from_user.id):
+        await cb.answer("Доступ не выдан", show_alert=True)
+        return
+    if not kb or not kb.questions:
+        await cb.answer("База вопросов не загружена", show_alert=True)
+        return
+    text, markup = sections_page()
+    try:
+        await cb.message.edit_text(text, reply_markup=markup)
+    except Exception:
+        pass
+    await cb.answer()
+
+
 @dp.callback_query(F.data.startswith("page:"))
 async def cb_page(cb: CallbackQuery):
     if not allowed(cb.from_user.id):
@@ -556,12 +619,19 @@ async def cb_page(cb: CallbackQuery):
     if not kb or not kb.questions:
         await cb.answer("База вопросов не загружена", show_alert=True)
         return
+    parts = cb.data.split(":")
     try:
-        page = int(cb.data.split(":", 1)[1])
+        if len(parts) >= 3:
+            sec, page = int(parts[1]), int(parts[2])
+        else:
+            sec, page = 0, int(parts[1])
     except (ValueError, IndexError):
         await cb.answer()
         return
-    text, markup = questions_page(page)
+    if not 0 <= sec < len(kb.sections):
+        await cb.answer("Раздел не найден", show_alert=True)
+        return
+    text, markup = questions_page(sec, page)
     try:
         await cb.message.edit_text(text, reply_markup=markup)
     except Exception:
@@ -586,8 +656,16 @@ async def cb_question(cb: CallbackQuery):
         await cb.answer("Вопрос не найден", show_alert=True)
         return
     await cb.answer()
+    sec = kb.section_of(idx)
     try:
-        await cb.message.edit_text(f"Выбран вопрос {idx + 1} из {len(kb.questions)}.")
+        await cb.message.edit_text(
+            f"Выбран вопрос {idx + 1} из {len(kb.questions)}.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[[
+                    InlineKeyboardButton(text="⬅️ К разделу", callback_data=f"sec:{sec}")
+                ]]
+            ),
+        )
     except Exception:
         pass
     await send_question(cb.message, cb.from_user.id, idx)
