@@ -25,6 +25,13 @@ DEFAULT_DEMO_LIMIT = 5
 SUBSCRIPTION_DAYS = 30
 SUPPORT_URL = os.getenv("SUPPORT_URL", "https://t.me/exam_admin").strip()
 
+# Защита от спама и перегрузки
+RATE_LIMIT_SECONDS = int(os.getenv("RATE_LIMIT_SECONDS", "6"))
+RATE_LIMIT_PER_HOUR = int(os.getenv("RATE_LIMIT_PER_HOUR", "60"))
+MAX_INPUT_CHARS = int(os.getenv("MAX_INPUT_CHARS", "4000"))
+MAX_VOICE_SECONDS = int(os.getenv("MAX_VOICE_SECONDS", "120"))
+MAX_CONCURRENT_LLM = int(os.getenv("MAX_CONCURRENT_LLM", "4"))
+
 # Администратор: статистика и диагностика доступны только этому ID.
 ADMIN_ID = 7930922924
 

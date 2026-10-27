@@ -104,6 +104,8 @@ def _init_sqlite():
             c.execute("ALTER TABLE users ADD COLUMN paid_until INTEGER")
         if "granted" not in cols:
             c.execute("ALTER TABLE users ADD COLUMN granted INTEGER NOT NULL DEFAULT 0")
+        if "banned" not in cols:
+            c.execute("ALTER TABLE users ADD COLUMN banned INTEGER NOT NULL DEFAULT 0")
 
 
 def _init_pg():
@@ -125,7 +127,8 @@ def _init_pg():
                    updated_at TEXT,
                    demo_used INTEGER NOT NULL DEFAULT 0,
                    paid_until BIGINT,
-                   granted INTEGER NOT NULL DEFAULT 0
+                   granted INTEGER NOT NULL DEFAULT 0,
+                   banned INTEGER NOT NULL DEFAULT 0
                )"""
         )
         conn.execute(
@@ -179,6 +182,8 @@ def _init_pg():
             conn.execute("ALTER TABLE users ADD COLUMN paid_until BIGINT")
         if "granted" not in cols:
             conn.execute("ALTER TABLE users ADD COLUMN granted INTEGER NOT NULL DEFAULT 0")
+        if "banned" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN banned INTEGER NOT NULL DEFAULT 0")
 
 
 def init():
@@ -326,6 +331,22 @@ def access(user_id: int) -> Dict:
 def is_paid(user_id: int) -> bool:
     a = access(user_id)
     return bool(a["granted"]) or (a["paid_until"] is not None and a["paid_until"] > time.time())
+
+
+def is_banned(user_id: int) -> bool:
+    with _conn() as c:
+        row = c.execute("SELECT banned FROM users WHERE user_id=?", (user_id,)).fetchone()
+    return bool(row and row[0])
+
+
+def set_banned(user_id: int, banned: bool):
+    now = datetime.utcnow().isoformat()
+    with _conn() as c:
+        c.execute(
+            """INSERT INTO users(user_id, mode, banned, updated_at) VALUES(?,?,?,?)
+               ON CONFLICT(user_id) DO UPDATE SET banned=excluded.banned, updated_at=excluded.updated_at""",
+            (user_id, "idle", 1 if banned else 0, now),
+        )
 
 
 def inc_demo(user_id: int) -> int:
