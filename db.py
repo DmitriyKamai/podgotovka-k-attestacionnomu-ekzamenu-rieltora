@@ -1,7 +1,20 @@
+"""Postgres-слой бота.
+
+Внешняя база (Neon) периодически закрывает простаивающие соединения
+(`AdminShutdown`, `ConnectionDoesNotExist` и т.п.). Поэтому:
+
+* пул проверяет соединение перед выдачей (`check=check_connection`);
+* простаивающие соединения пересоздаются (`max_idle`);
+* каждая операция при обрыве соединения повторяется (см. `_retry`).
+"""
+
+import functools
+import logging
+import random
 import time
 from contextlib import contextmanager
 from datetime import datetime
-from typing import List, Dict, Optional
+from typing import Dict, List, Optional
 
 import psycopg
 from psycopg_pool import ConnectionPool
@@ -13,6 +26,13 @@ if not DATABASE_URL:
         "DATABASE_URL не задан. Бот работает только с внешней Postgres — "
         "укажите строку подключения в переменных окружения."
     )
+
+log = logging.getLogger(__name__)
+
+# Ошибки, при которых соединение мертво, а запрос имеет смысл повторить.
+TRANSIENT_ERRORS = (psycopg.OperationalError, psycopg.InterfaceError)
+
+RETRY_ATTEMPTS = 3
 
 _pool: "ConnectionPool | None" = None
 
@@ -35,16 +55,57 @@ def _conn():
         yield _Proxy(conn)
 
 
+def _retry(func):
+    """Повторяет операцию, если соединение с базой оборвалось."""
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        delay = 0.3
+        for attempt in range(1, RETRY_ATTEMPTS + 1):
+            try:
+                return func(*args, **kwargs)
+            except TRANSIENT_ERRORS as e:
+                if attempt == RETRY_ATTEMPTS:
+                    log.error("%s: обрыв соединения, попытки исчерпаны: %s", func.__name__, e)
+                    raise
+                log.warning(
+                    "%s: обрыв соединения (%s), повтор %d/%d",
+                    func.__name__, type(e).__name__, attempt, RETRY_ATTEMPTS - 1,
+                )
+                time.sleep(delay + random.uniform(0, 0.2))
+                delay *= 2
+
+    return wrapper
+
+
 def init():
+    """Создаёт пул и таблицы. Повторный вызов безопасен."""
     global _pool
+    if _pool is not None:
+        return
+
     url = DATABASE_URL
     if url.startswith("postgres://"):
         url = "postgresql://" + url[len("postgres://"):]
-    conn_kwargs = {"connect_timeout": 10}
+    conn_kwargs = {"connect_timeout": 10, "keepalives": 1, "keepalives_idle": 30}
     if "-pooler" in url:
         # PgBouncer в transaction-режиме не дружит с серверными prepared statements
         conn_kwargs["prepare_threshold"] = None
-    _pool = ConnectionPool(url, min_size=1, max_size=5, open=True, kwargs=conn_kwargs)
+
+    _pool = ConnectionPool(
+        url,
+        min_size=1,
+        max_size=5,
+        open=True,
+        kwargs=conn_kwargs,
+        # мёртвое соединение не выдаётся из пула
+        check=ConnectionPool.check_connection,
+        # простаивающие соединения пересоздаются, пока Neon их не прибил
+        max_idle=90,
+        max_lifetime=1800,
+        timeout=15,
+        reconnect_timeout=60,
+    )
 
     with _pool.connection() as conn:
         conn.execute(
@@ -114,6 +175,7 @@ def init():
             conn.execute("ALTER TABLE users ADD COLUMN banned INTEGER NOT NULL DEFAULT 0")
 
 
+@_retry
 def get_user(user_id: int) -> Dict:
     with _conn() as c:
         row = c.execute(
@@ -124,6 +186,7 @@ def get_user(user_id: int) -> Dict:
         return {"user_id": user_id, "mode": "idle", "q_index": None}
 
 
+@_retry
 def set_user(user_id: int, mode: Optional[str] = None, q_index: Optional[int] = None):
     cur = get_user(user_id)
     mode = cur["mode"] if mode is None else mode
@@ -138,6 +201,7 @@ def set_user(user_id: int, mode: Optional[str] = None, q_index: Optional[int] = 
         )
 
 
+@_retry
 def add_history(user_id: int, role: str, content: str):
     with _conn() as c:
         c.execute(
@@ -146,6 +210,7 @@ def add_history(user_id: int, role: str, content: str):
         )
 
 
+@_retry
 def get_history(user_id: int, limit: int = 8) -> List[Dict[str, str]]:
     with _conn() as c:
         rows = c.execute(
@@ -155,11 +220,13 @@ def get_history(user_id: int, limit: int = 8) -> List[Dict[str, str]]:
     return [{"role": r[0], "content": r[1]} for r in reversed(rows)]
 
 
+@_retry
 def clear_history(user_id: int):
     with _conn() as c:
         c.execute("DELETE FROM history WHERE user_id=?", (user_id,))
 
 
+@_retry
 def reset_user(user_id: int):
     with _conn() as c:
         c.execute(
@@ -168,6 +235,7 @@ def reset_user(user_id: int):
         )
 
 
+@_retry
 def record_answer(
     user_id: int,
     username: str | None,
@@ -192,6 +260,7 @@ def record_answer(
         )
 
 
+@_retry
 def stats(limit: int = 100) -> List[Dict]:
     with _conn() as c:
         rows = c.execute(
@@ -218,6 +287,7 @@ def stats(limit: int = 100) -> List[Dict]:
     ]
 
 
+@_retry
 def stats_totals() -> Dict:
     with _conn() as c:
         row = c.execute(
@@ -226,18 +296,21 @@ def stats_totals() -> Dict:
     return {"count": row[0] or 0, "avg": row[1], "users": row[2] or 0}
 
 
+@_retry
 def count_users() -> int:
     with _conn() as c:
         row = c.execute("SELECT COUNT(*) FROM users").fetchone()
     return row[0] or 0
 
 
+@_retry
 def count_answers() -> int:
     with _conn() as c:
         row = c.execute("SELECT COUNT(*) FROM answers").fetchone()
     return row[0] or 0
 
 
+@_retry
 def columns(table: str = "users") -> List[str]:
     """Колонки таблицы — для диагностики схемы."""
     with _conn() as c:
@@ -250,6 +323,7 @@ def columns(table: str = "users") -> List[str]:
 
 # ---------- платный доступ ----------
 
+@_retry
 def access(user_id: int) -> Dict:
     with _conn() as c:
         row = c.execute(
@@ -261,17 +335,20 @@ def access(user_id: int) -> Dict:
     return {"demo_used": 0, "paid_until": None, "granted": 0}
 
 
+@_retry
 def is_paid(user_id: int) -> bool:
     a = access(user_id)
     return bool(a["granted"]) or (a["paid_until"] is not None and a["paid_until"] > time.time())
 
 
+@_retry
 def is_banned(user_id: int) -> bool:
     with _conn() as c:
         row = c.execute("SELECT banned FROM users WHERE user_id=?", (user_id,)).fetchone()
     return bool(row and row[0])
 
 
+@_retry
 def set_banned(user_id: int, banned: bool):
     now = datetime.utcnow().isoformat()
     with _conn() as c:
@@ -282,18 +359,22 @@ def set_banned(user_id: int, banned: bool):
         )
 
 
+@_retry
 def inc_demo(user_id: int) -> int:
+    """Один запрос с RETURNING — атомарно и без лишнего round-trip."""
     now = datetime.utcnow().isoformat()
     with _conn() as c:
-        c.execute(
+        row = c.execute(
             """INSERT INTO users(user_id, mode, demo_used, updated_at) VALUES(?,?,?,?)
-               ON CONFLICT(user_id) DO UPDATE SET demo_used=users.demo_used+1, updated_at=excluded.updated_at""",
+               ON CONFLICT(user_id) DO UPDATE SET
+                 demo_used=users.demo_used+1, updated_at=excluded.updated_at
+               RETURNING demo_used""",
             (user_id, "idle", 1, now),
-        )
-        row = c.execute("SELECT demo_used FROM users WHERE user_id=?", (user_id,)).fetchone()
+        ).fetchone()
     return row[0]
 
 
+@_retry
 def set_paid(user_id: int, until_ts: int):
     now = datetime.utcnow().isoformat()
     with _conn() as c:
@@ -304,6 +385,7 @@ def set_paid(user_id: int, until_ts: int):
         )
 
 
+@_retry
 def grant(user_id: int, days: Optional[int] = None):
     """Админ выдаёт доступ: без days — навсегда (granted), с days — на срок."""
     now = datetime.utcnow().isoformat()
@@ -324,11 +406,19 @@ def grant(user_id: int, days: Optional[int] = None):
             )
 
 
+@_retry
 def record_payment(
     user_id: int, charge_id: str | None, amount: int, currency: str,
     is_recurring: bool, until_ts: int,
 ):
+    """Пишет платёж один раз: повторный вызов с тем же charge_id игнорируется."""
     with _conn() as c:
+        if charge_id:
+            exists = c.execute(
+                "SELECT 1 FROM payments WHERE charge_id=? LIMIT 1", (charge_id,)
+            ).fetchone()
+            if exists:
+                return
         c.execute(
             """INSERT INTO payments(user_id, charge_id, amount, currency, is_recurring, until_ts, ts)
                VALUES(?,?,?,?,?,?,?)""",
@@ -346,12 +436,14 @@ def record_payment(
 
 # ---------- настройки ----------
 
+@_retry
 def get_setting(key: str, default: str = "") -> str:
     with _conn() as c:
         row = c.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
     return row[0] if row and row[0] is not None else default
 
 
+@_retry
 def set_setting(key: str, value: str):
     with _conn() as c:
         c.execute(
@@ -360,6 +452,7 @@ def set_setting(key: str, value: str):
         )
 
 
+@_retry
 def users_overview(limit: int = 200) -> List[Dict]:
     """Список пользователей: доступ, демо, число ответов и средний балл."""
     with _conn() as c:

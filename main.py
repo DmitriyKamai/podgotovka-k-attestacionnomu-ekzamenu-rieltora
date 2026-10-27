@@ -23,6 +23,7 @@ from aiogram.types import (
     Message,
     PreCheckoutQuery,
 )
+import psycopg
 
 import db
 from config import (
@@ -1433,7 +1434,13 @@ async def on_error(event: ErrorEvent):
     msg = event.update.message
     if msg is not None:
         try:
-            text = "Ошибка при обработке. Попробуйте ещё раз или напишите @exam_admin."
+            if isinstance(event.exception, psycopg.OperationalError):
+                text = (
+                    "База данных временно недоступна. Попробуйте через минуту — "
+                    "прогресс и доступ не потеряны."
+                )
+            else:
+                text = "Ошибка при обработке. Попробуйте ещё раз или напишите @exam_admin."
             if is_admin(msg.from_user.id):
                 text += f"\n\n{type(event.exception).__name__}: {event.exception}"
             await msg.answer(text)
