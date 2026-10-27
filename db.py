@@ -1,16 +1,52 @@
 import sqlite3
 import time
+from contextlib import contextmanager
 from datetime import datetime
 from typing import List, Dict, Optional
 
-from config import DB_PATH
+from config import DATABASE_URL, DB_PATH
+
+USE_PG = bool(DATABASE_URL)
+
+if USE_PG:
+    try:
+        import psycopg
+        from psycopg_pool import ConnectionPool
+    except ImportError as e:  # pragma: no cover
+        raise RuntimeError(
+            "Для внешней базы установите psycopg[binary] и psycopg_pool"
+        ) from e
+
+    _pool: "ConnectionPool | None" = None
 
 
+class _PGProxy:
+    """Прокси соединения: переводит ? на %s, чтобы остальной код не менялся."""
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def execute(self, sql: str, params=()):
+        return self._conn.execute(sql.replace("?", "%s"), params)
+
+
+@contextmanager
 def _conn():
-    return sqlite3.connect(DB_PATH)
+    if USE_PG:
+        if _pool is None:
+            raise RuntimeError("База не инициализирована: вызовите db.init()")
+        with _pool.connection() as conn:
+            yield _PGProxy(conn)
+    else:
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            yield conn
+            conn.commit()
+        finally:
+            conn.close()
 
 
-def init():
+def _init_sqlite():
     with _conn() as c:
         c.execute(
             """CREATE TABLE IF NOT EXISTS users (
@@ -61,7 +97,6 @@ def init():
                    value TEXT
                )"""
         )
-        # миграция: добавляем поля платного доступа, если их ещё нет
         cols = {r[1] for r in c.execute("PRAGMA table_info(users)").fetchall()}
         if "demo_used" not in cols:
             c.execute("ALTER TABLE users ADD COLUMN demo_used INTEGER NOT NULL DEFAULT 0")
@@ -69,6 +104,84 @@ def init():
             c.execute("ALTER TABLE users ADD COLUMN paid_until INTEGER")
         if "granted" not in cols:
             c.execute("ALTER TABLE users ADD COLUMN granted INTEGER NOT NULL DEFAULT 0")
+
+
+def _init_pg():
+    global _pool
+    url = DATABASE_URL
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+    _pool = ConnectionPool(url, min_size=1, max_size=5, open=True)
+    with _pool.connection() as conn:
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS users (
+                   user_id BIGINT PRIMARY KEY,
+                   mode TEXT NOT NULL DEFAULT 'idle',
+                   q_index INTEGER,
+                   updated_at TEXT,
+                   demo_used INTEGER NOT NULL DEFAULT 0,
+                   paid_until BIGINT,
+                   granted INTEGER NOT NULL DEFAULT 0
+               )"""
+        )
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS history (
+                   id BIGSERIAL PRIMARY KEY,
+                   user_id BIGINT NOT NULL,
+                   role TEXT NOT NULL,
+                   content TEXT NOT NULL,
+                   ts TEXT NOT NULL
+               )"""
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_hist_user ON history(user_id)")
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS answers (
+                   id BIGSERIAL PRIMARY KEY,
+                   user_id BIGINT NOT NULL,
+                   username TEXT,
+                   first_name TEXT,
+                   q_index INTEGER,
+                   question TEXT,
+                   score INTEGER,
+                   ts TEXT NOT NULL
+               )"""
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_answers_user ON answers(user_id)")
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS payments (
+                   id BIGSERIAL PRIMARY KEY,
+                   user_id BIGINT NOT NULL,
+                   charge_id TEXT,
+                   amount INTEGER,
+                   currency TEXT,
+                   is_recurring INTEGER,
+                   until_ts BIGINT,
+                   ts TEXT NOT NULL
+               )"""
+        )
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS settings (
+                   key TEXT PRIMARY KEY,
+                   value TEXT
+               )"""
+        )
+        rows = conn.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = 'users'"
+        ).fetchall()
+        cols = {r[0] for r in rows}
+        if "demo_used" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN demo_used INTEGER NOT NULL DEFAULT 0")
+        if "paid_until" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN paid_until BIGINT")
+        if "granted" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN granted INTEGER NOT NULL DEFAULT 0")
+
+
+def init():
+    if USE_PG:
+        _init_pg()
+    else:
+        _init_sqlite()
 
 
 def get_user(user_id: int) -> Dict:
@@ -325,4 +438,3 @@ def users_overview(limit: int = 200) -> List[Dict]:
         }
         for r in rows
     ]
-

@@ -93,5 +93,7 @@ def _resolve_db_path() -> str:
 
 
 DB_PATH = _resolve_db_path()
+# Внешняя база (Postgres). Если задана — SQLite не используется.
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 MAX_HISTORY = int(os.getenv("MAX_HISTORY", "8"))
 USER_AGENT = os.getenv("USER_AGENT", "exam-prep-bot/1.0")

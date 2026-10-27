@@ -635,10 +635,11 @@ async def cmd_diag(message: Message):
     db_in_base = os.path.dirname(os.path.abspath(DB_PATH)) == os.path.abspath(BASE_DIR)
     lines = [
         "🔧 Диагностика базы",
+        f"БД: {'внешняя Postgres' if db.USE_PG else 'локальная SQLite'}",
         f"BASE_DIR: {BASE_DIR}",
         f"DATA_DIR: {DATA_DIR}",
-        f"DB: {DB_PATH}",
-        f"DB exists: {db_exists} ({db_size} байт)",
+        f"DB: {DB_PATH}" if not db.USE_PG else "DB: DATABASE_URL (внешняя)",
+        f"DB exists: {db_exists} ({db_size} байт)" if not db.USE_PG else "DB: подключение внешнее",
         f"пользователей: {db.count_users()} · ответов: {db.count_answers()}",
         f"exists: {os.path.isdir(DATA_DIR)}",
         f"cwd: {os.getcwd()}",
@@ -646,10 +647,10 @@ async def cmd_diag(message: Message):
         f"questions: {len(kb.questions) if kb else 0}",
         f"chunks: {len(kb.docs) if kb else 0}",
     ]
-    if db_in_base:
+    if db_in_base and not db.USE_PG:
         lines.append(
             "⚠️ БД лежит в папке бота — при передеплое она может удалиться. "
-            "Задайте DB_PATH на постоянный диск (например, /data/bot.sqlite3)."
+            "Задайте DATABASE_URL на внешнюю Postgres."
         )
     try:
         lines.append("files: " + ", ".join(sorted(os.listdir(DATA_DIR))[:20]))
@@ -692,6 +693,12 @@ async def cmd_backup(message: Message):
     if not is_admin(uid):
         await message.answer("Команда доступна только администратору.")
         return
+    if db.USE_PG:
+        await message.answer(
+            "База внешняя (Postgres). Резервные копии делает провайдер "
+            "(в Neon — branches/backups). Локальный файл не используется."
+        )
+        return
     if not os.path.isfile(DB_PATH):
         await message.answer("Файл базы не найден.")
         return
@@ -712,6 +719,12 @@ async def cmd_restore(message: Message):
     if not is_admin(uid):
         await message.answer("Команда доступна только администратору.")
         return
+    if db.USE_PG:
+        await message.answer(
+            "База внешняя (Postgres). Восстановление из файла не поддерживается — "
+            "используйте резервные копии провайдера (Neon: branches/restore)."
+        )
+        return
     await message.answer(
         "Пришлите файл базы (.sqlite3), сохранённый через /backup.\n"
         "Текущая база будет сохранена рядом как .bak."
@@ -722,6 +735,9 @@ async def cmd_restore(message: Message):
 async def on_document(message: Message):
     uid = message.from_user.id
     if not is_admin(uid):
+        return
+    if db.USE_PG:
+        await message.answer("База внешняя (Postgres) — загрузка файла не используется.")
         return
     doc = message.document
     name = (doc.file_name or "").lower()
