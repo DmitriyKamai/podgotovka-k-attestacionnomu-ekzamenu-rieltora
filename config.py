@@ -19,7 +19,7 @@ YANDEX_STT_URL = os.getenv(
 
 # Платный доступ: значения по умолчанию. Меняются админом в меню «⚙️ Настройки».
 DEFAULT_PAID_MODE = True
-DEFAULT_PRICE_STARS = 250
+DEFAULT_PRICE_STARS = 500
 DEFAULT_DEMO_LIMIT = 5
 # Telegram разрешает для звёздных подписок только 30 дней (2592000 секунд).
 SUBSCRIPTION_DAYS = 30

@@ -225,7 +225,7 @@ async def get_invoice_link(bot: Bot) -> str:
     if key not in _invoice_cache:
         _invoice_cache[key] = await bot.create_invoice_link(
             title="Полный доступ к тренажёру риэлтера",
-            description=f"Все {total_questions()} вопросов программы + ответы по НПА + «Спросить по НПА». Подписка {days} дней.",
+            description=f"Все {total_questions()} вопросов программы, проверка ответов и краткие эталоны. Подписка {days} дней.",
             payload="sub",
             currency="XTR",
             prices=[LabeledPrice(label=f"Подписка {days} дней", amount=price)],
@@ -248,7 +248,7 @@ async def send_paywall(message: Message, uid: int, need_paid: bool = False):
     await message.answer(
         f"{head}\n\n"
         f"Подписка открывает все {total_questions()} вопросов программы, "
-        f"ответы по НПА и режим «Спросить по НПА» на {days} дней.\n"
+        f"проверку ответов и краткие эталоны на {days} дней.\n"
         f"Цена — {price} ⭐. Продлевается автоматически, отменить можно в Telegram → Настройки → Telegram Stars → Подписки.\n"
         f"Условия: /terms.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
@@ -268,11 +268,11 @@ async def ensure_access(message: Message, uid: int) -> bool:
     return False
 
 
-async def ensure_paid(message: Message, uid: int) -> bool:
-    """Допуск к платным разделам (без демо): «Спросить по НПА»."""
-    if not paid_mode() or has_access(uid):
+async def ensure_admin_ask(message: Message, uid: int) -> bool:
+    """Режим «Спросить по НПА» — только для администратора."""
+    if is_admin(uid):
         return True
-    await send_paywall(message, uid, need_paid=True)
+    await message.answer("Режим «Спросить по НПА» доступен только администратору.")
     return False
 
 
@@ -304,7 +304,7 @@ async def show_subscription(message: Message, uid: int):
     demo_note = f"Бесплатных вопросов осталось: {left}.\n\n" if left > 0 else ""
     await message.answer(
         f"{demo_note}Подписка на {SUBSCRIPTION_DAYS} дней — {price_stars()} ⭐.\n"
-        "Открывает все вопросы программы, проверку ответов и «Спросить по НПА».",
+        "Открывает все вопросы программы, проверку ответов и краткие эталоны.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text=f"💳 Оплатить {price_stars()} ⭐", url=link)
         ]]),
@@ -421,7 +421,6 @@ async def cmd_start(message: Message):
         "🎓 Экзамен — вопрос → ваш ответ → проверка\n"
         "📋 Выбрать вопрос — раздел → вопрос\n"
         "➡️ Следующий — следующий вопрос\n"
-        "❓ Спросить по НПА — вопрос по законодательству\n"
         "⏹ Закончить — выйти из режима экзамена\n"
         "🔄 Сброс — очистить историю и прогресс\n"
         "💳 Подписка — купить или проверить доступ\n\n"
@@ -433,12 +432,14 @@ async def cmd_start(message: Message):
     if paid_mode():
         text += (
             f"\n\n🔒 Бесплатно — первые {demo_limit()} вопросов. "
-            f"Полный доступ — по подписке {price_stars()} ⭐ / {SUBSCRIPTION_DAYS} дней. "
-            "«Спросить по НПА» — только по подписке."
+            f"Полный доступ — по подписке {price_stars()} ⭐ / {SUBSCRIPTION_DAYS} дней."
         )
         text += "\n\n📄 Условия — /terms, поддержка — /support."
     if is_admin(uid):
-        text += "\n\nАдмин-панель: 📊 Статистика, 🔧 Диагностика, ⚙️ Настройки."
+        text += (
+            "\n\nАдмин-панель: 📊 Статистика, 👥 Пользователи, ⚙️ Настройки, "
+            "❓ Спросить по НПА."
+        )
     await message.answer(text, reply_markup=menu(uid))
 
 
@@ -446,7 +447,7 @@ async def cmd_start(message: Message):
 async def cmd_terms(message: Message):
     await message.answer(
         "📄 Условия подписки\n\n"
-        f"• Услуга: доступ к тренажёру риэлтера — все {total_questions()} вопросов, проверка ответов и «Спросить по НПА».\n"
+        f"• Услуга: доступ к тренажёру риэлтера — все {total_questions()} вопросов, проверка ответов и краткие эталоны.\n"
         f"• Срок: {SUBSCRIPTION_DAYS} дней с момента оплаты, продлевается автоматически.\n"
         f"• Цена: {price_stars()} ⭐ за период.\n"
         "• Отмена: в Telegram → Настройки → Telegram Stars → Подписки (до даты следующего списания).\n"
@@ -862,7 +863,7 @@ async def cmd_ask(message: Message):
     if not allowed(uid):
         await message.answer(f"Доступ не выдан. Ваш ID: {uid}")
         return
-    if not await ensure_paid(message, uid):
+    if not await ensure_admin_ask(message, uid):
         return
     parts = (message.text or "").split(maxsplit=1)
     if len(parts) < 2:
@@ -937,7 +938,7 @@ async def on_menu(message: Message):
     elif text == BTN_NEXT:
         await cmd_next(message)
     elif text == BTN_ASK:
-        if not await ensure_paid(message, uid):
+        if not await ensure_admin_ask(message, uid):
             return
         db.set_user(uid, mode="ask")
         await message.answer("Напишите вопрос по НПА одним сообщением.", reply_markup=menu(uid))
@@ -1084,7 +1085,7 @@ async def grade_answer(message: Message, answer: str, idx: int):
 
 async def answer_ask(message: Message, question: str):
     uid = message.from_user.id
-    if not await ensure_paid(message, uid):
+    if not await ensure_admin_ask(message, uid):
         return
     context = kb.build_context(question) if kb else ""
     if not context:
@@ -1322,7 +1323,7 @@ async def on_successful_payment(message: Message):
     exp = time.strftime("%d.%m.%Y", time.localtime(until))
     await message.answer(
         f"✅ Оплата принята!\nПодписка активна до {exp}.\n"
-        f"Все вопросы программы и «Спросить по НПА» теперь доступны.",
+        f"Все вопросы программы и проверка ответов теперь доступны.",
         reply_markup=menu(uid),
     )
 
@@ -1333,6 +1334,11 @@ async def main():
         print("BOT_TOKEN не задан в .env")
         sys.exit(1)
     db.init()
+    # разовая миграция цены на 500 ⭐ (старое значение 250 больше не используется)
+    if db.get_setting("price_migrated_500", "") != "1":
+        if db.get_setting("price_stars", "") in ("", "250"):
+            db.set_setting("price_stars", "500")
+        db.set_setting("price_migrated_500", "1")
     kb = KnowledgeBase()
     bot = Bot(token=BOT_TOKEN)
     public_commands = [
@@ -1341,7 +1347,6 @@ async def main():
         BotCommand(command="list", description="📋 Выбрать вопрос из списка"),
         BotCommand(command="q", description="🔢 Выбрать вопрос по номеру Программы"),
         BotCommand(command="next", description="➡️ Следующий вопрос"),
-        BotCommand(command="ask", description="❓ Спросить по НПА"),
         BotCommand(command="stop", description="⏹ Закончить экзамен"),
         BotCommand(command="reset", description="🔄 Сбросить прогресс"),
         BotCommand(command="subscribe", description="💳 Подписка"),
@@ -1350,6 +1355,7 @@ async def main():
         BotCommand(command="paysupport", description="💳 Поддержка по оплате"),
     ]
     admin_commands = public_commands + [
+        BotCommand(command="ask", description="❓ Спросить по НПА (админ)"),
         BotCommand(command="stats", description="📊 Статистика ответов"),
         BotCommand(command="users", description="👥 Пользователи и доступ"),
         BotCommand(command="check", description="🧪 Проверка базы ответов"),

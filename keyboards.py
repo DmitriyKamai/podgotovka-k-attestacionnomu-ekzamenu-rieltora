@@ -28,11 +28,11 @@ MENU_TEXTS = {
 def main_menu(admin: bool = False) -> ReplyKeyboardMarkup:
     rows = [
         [KeyboardButton(text=BTN_EXAM), KeyboardButton(text=BTN_LIST)],
-        [KeyboardButton(text=BTN_NEXT), KeyboardButton(text=BTN_ASK)],
-        [KeyboardButton(text=BTN_STOP), KeyboardButton(text=BTN_RESET)],
-        [KeyboardButton(text=BTN_SUBSCRIBE)],
+        [KeyboardButton(text=BTN_NEXT), KeyboardButton(text=BTN_STOP)],
+        [KeyboardButton(text=BTN_SUBSCRIBE), KeyboardButton(text=BTN_RESET)],
     ]
     if admin:
+        rows.append([KeyboardButton(text=BTN_ASK)])
         rows.append([KeyboardButton(text=BTN_STATS), KeyboardButton(text=BTN_USERS)])
         rows.append([KeyboardButton(text=BTN_GRANT), KeyboardButton(text=BTN_SETTINGS)])
         rows.append([KeyboardButton(text=BTN_DIAG), KeyboardButton(text=BTN_ID)])
