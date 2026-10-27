@@ -315,6 +315,19 @@ def count_answers() -> int:
     return row[0] or 0
 
 
+def columns(table: str = "users") -> List[str]:
+    """Колонки таблицы — для диагностики схемы."""
+    with _conn() as c:
+        if USE_PG:
+            rows = c.execute(
+                "SELECT column_name FROM information_schema.columns WHERE table_name=?",
+                (table,),
+            ).fetchall()
+        else:
+            rows = c.execute(f"PRAGMA table_info({table})").fetchall()
+    return [r[0] for r in rows]
+
+
 # ---------- платный доступ ----------
 
 def access(user_id: int) -> Dict:

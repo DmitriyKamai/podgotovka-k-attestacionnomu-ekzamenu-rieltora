@@ -711,6 +711,10 @@ async def cmd_diag(message: Message):
     db_exists = os.path.isfile(DB_PATH)
     db_size = os.path.getsize(DB_PATH) if db_exists else 0
     db_in_base = os.path.dirname(os.path.abspath(DB_PATH)) == os.path.abspath(BASE_DIR)
+    try:
+        cols_line = ", ".join(db.columns("users"))
+    except Exception as e:
+        cols_line = f"error {e}"
     lines = [
         "🔧 Диагностика базы",
         f"БД: {'внешняя Postgres' if db.USE_PG else 'локальная SQLite'}",
@@ -718,6 +722,7 @@ async def cmd_diag(message: Message):
         f"DATA_DIR: {DATA_DIR}",
         f"DB: {DB_PATH}" if not db.USE_PG else "DB: DATABASE_URL (внешняя)",
         f"DB exists: {db_exists} ({db_size} байт)" if not db.USE_PG else "DB: подключение внешнее",
+        f"users cols: {cols_line}",
         f"пользователей: {db.count_users()} · ответов: {db.count_answers()}",
         f"exists: {os.path.isdir(DATA_DIR)}",
         f"cwd: {os.getcwd()}",
