@@ -195,7 +195,9 @@ def record_answer(
 def stats(limit: int = 100) -> List[Dict]:
     with _conn() as c:
         rows = c.execute(
-            """SELECT user_id, username, first_name,
+            """SELECT user_id,
+                      MAX(username) AS username,
+                      MAX(first_name) AS first_name,
                       COUNT(*) AS cnt,
                       AVG(score) AS avg_score
                FROM answers
@@ -368,7 +370,9 @@ def users_overview(limit: int = 200) -> List[Dict]:
                    SELECT user_id FROM answers
                )
                SELECT ids.user_id,
-                      u.demo_used, u.paid_until, u.granted,
+                      MAX(u.demo_used) AS demo_used,
+                      MAX(u.paid_until) AS paid_until,
+                      MAX(u.granted) AS granted,
                       COUNT(a.id) AS cnt,
                       AVG(a.score) AS avg_score,
                       MAX(a.username) AS username,
