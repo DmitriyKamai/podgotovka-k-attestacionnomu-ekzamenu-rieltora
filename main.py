@@ -7,6 +7,7 @@ import random
 import re
 import sys
 import time
+import traceback
 from collections import deque
 
 from aiogram import Bot, Dispatcher, F
@@ -128,6 +129,7 @@ def allowed(user_id: int) -> bool:
 _last_action: dict[int, float] = {}
 _action_window: dict[int, deque] = {}
 _llm_sem = asyncio.Semaphore(MAX_CONCURRENT_LLM)
+_last_error: str = ""
 
 
 def rate_limit(uid: int) -> str | None:
@@ -689,6 +691,15 @@ async def save_setting(message: Message, mode: str, text: str):
     _invoice_cache.clear()
     await message.answer("✅ Сохранено.")
     await show_settings(message)
+
+
+@dp.message(Command("lasterror"))
+async def cmd_lasterror(message: Message):
+    uid = message.from_user.id
+    if not is_admin(uid):
+        await message.answer("Команда доступна только администратору.")
+        return
+    await send_long(message, _last_error or "Ошибок не было.")
 
 
 @dp.message(Command("diag"))
@@ -1417,13 +1428,22 @@ async def on_successful_payment(message: Message):
 
 @dp.errors()
 async def on_error(event: ErrorEvent):
+    global _last_error
+    tb = "".join(
+        traceback.format_exception(
+            type(event.exception), event.exception, event.exception.__traceback__
+        )
+    )
+    tb = re.sub(r"postgresql://[^\s\"']+", "postgresql://***", tb)
+    _last_error = tb[-3500:]
     log.error("handler error: %s", event.exception, exc_info=event.exception)
     msg = event.update.message
     if msg is not None:
         try:
-            await msg.answer(
-                "Ошибка при обработке. Попробуйте ещё раз или напишите @exam_admin."
-            )
+            text = "Ошибка при обработке. Попробуйте ещё раз или напишите @exam_admin."
+            if is_admin(msg.from_user.id):
+                text += f"\n\n{type(event.exception).__name__}: {event.exception}"
+            await msg.answer(text)
         except Exception:
             pass
     return True
@@ -1461,6 +1481,7 @@ async def main():
         BotCommand(command="users", description="👥 Пользователи и доступ"),
         BotCommand(command="check", description="🧪 Проверка базы ответов"),
         BotCommand(command="diag", description="🔧 Диагностика базы"),
+        BotCommand(command="lasterror", description="🧯 Последняя ошибка"),
         BotCommand(command="grant", description="➕ Выдать доступ по ID"),
         BotCommand(command="ban", description="🚫 Забанить по ID"),
         BotCommand(command="unban", description="✅ Разбанить по ID"),
