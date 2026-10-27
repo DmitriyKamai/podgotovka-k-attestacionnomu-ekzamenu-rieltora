@@ -111,7 +111,11 @@ def _init_pg():
     url = DATABASE_URL
     if url.startswith("postgres://"):
         url = "postgresql://" + url[len("postgres://"):]
-    _pool = ConnectionPool(url, min_size=1, max_size=5, open=True)
+    conn_kwargs = {"connect_timeout": 10}
+    if "-pooler" in url:
+        # PgBouncer в transaction-режиме не дружит с серверными prepared statements
+        conn_kwargs["prepare_threshold"] = None
+    _pool = ConnectionPool(url, min_size=1, max_size=5, open=True, kwargs=conn_kwargs)
     with _pool.connection() as conn:
         conn.execute(
             """CREATE TABLE IF NOT EXISTS users (
