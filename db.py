@@ -364,10 +364,11 @@ def set_banned(user_id: int, banned: bool):
 
 def inc_demo(user_id: int) -> int:
     now = datetime.utcnow().isoformat()
+    col = "users.demo_used" if USE_PG else "demo_used"
     with _conn() as c:
         c.execute(
-            """INSERT INTO users(user_id, mode, demo_used, updated_at) VALUES(?,?,?,?)
-               ON CONFLICT(user_id) DO UPDATE SET demo_used=demo_used+1, updated_at=excluded.updated_at""",
+            f"""INSERT INTO users(user_id, mode, demo_used, updated_at) VALUES(?,?,?,?)
+               ON CONFLICT(user_id) DO UPDATE SET demo_used={col}+1, updated_at=excluded.updated_at""",
             (user_id, "idle", 1, now),
         )
         row = c.execute("SELECT demo_used FROM users WHERE user_id=?", (user_id,)).fetchone()
