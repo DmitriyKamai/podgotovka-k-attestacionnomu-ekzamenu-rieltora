@@ -5,7 +5,6 @@ import logging
 import os
 import random
 import re
-import shutil
 import sys
 import time
 
@@ -15,7 +14,6 @@ from aiogram.types import (
     BotCommand,
     BotCommandScopeChat,
     CallbackQuery,
-    FSInputFile,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     LabeledPrice,
@@ -685,90 +683,6 @@ async def cmd_stars(message: Message):
     lines.append(f"Поступления в выборке: {incoming} ⭐")
     lines.append("Баланс и вывод — в профиле бота (карандаш → «Баланс») или на Fragment.")
     await send_long(message, "\n".join(lines))
-
-
-@dp.message(Command("backup"))
-async def cmd_backup(message: Message):
-    uid = message.from_user.id
-    if not is_admin(uid):
-        await message.answer("Команда доступна только администратору.")
-        return
-    if db.USE_PG:
-        await message.answer(
-            "База внешняя (Postgres). Резервные копии делает провайдер "
-            "(в Neon — branches/backups). Локальный файл не используется."
-        )
-        return
-    if not os.path.isfile(DB_PATH):
-        await message.answer("Файл базы не найден.")
-        return
-    name = f"bot_backup_{time.strftime('%Y%m%d_%H%M')}.sqlite3"
-    await message.answer_document(
-        FSInputFile(DB_PATH, filename=name),
-        caption=(
-            f"💾 Резервная копия базы\n"
-            f"пользователей: {db.count_users()} · ответов: {db.count_answers()}\n\n"
-            "Чтобы восстановить — пришлите этот файл боту (или /restore)."
-        ),
-    )
-
-
-@dp.message(Command("restore"))
-async def cmd_restore(message: Message):
-    uid = message.from_user.id
-    if not is_admin(uid):
-        await message.answer("Команда доступна только администратору.")
-        return
-    if db.USE_PG:
-        await message.answer(
-            "База внешняя (Postgres). Восстановление из файла не поддерживается — "
-            "используйте резервные копии провайдера (Neon: branches/restore)."
-        )
-        return
-    await message.answer(
-        "Пришлите файл базы (.sqlite3), сохранённый через /backup.\n"
-        "Текущая база будет сохранена рядом как .bak."
-    )
-
-
-@dp.message(F.document)
-async def on_document(message: Message):
-    uid = message.from_user.id
-    if not is_admin(uid):
-        return
-    if db.USE_PG:
-        await message.answer("База внешняя (Postgres) — загрузка файла не используется.")
-        return
-    doc = message.document
-    name = (doc.file_name or "").lower()
-    if not (name.endswith(".sqlite3") or name.endswith(".db")):
-        await message.answer("Нужен файл .sqlite3 (его присылает /backup).")
-        return
-    buf = io.BytesIO()
-    try:
-        await message.bot.download(doc, destination=buf)
-    except Exception:
-        await message.answer("Не удалось скачать файл.")
-        return
-    data = buf.getvalue()
-    if not data.startswith(b"SQLite format 3\x00"):
-        await message.answer("Это не файл SQLite.")
-        return
-    try:
-        if os.path.isfile(DB_PATH):
-            shutil.copy2(DB_PATH, DB_PATH + ".bak")
-        tmp = DB_PATH + ".upload"
-        with open(tmp, "wb") as f:
-            f.write(data)
-        os.replace(tmp, DB_PATH)
-        db.init()
-    except Exception as e:
-        await message.answer(f"Ошибка восстановления: {e}")
-        return
-    await message.answer(
-        "✅ База восстановлена.\n"
-        f"Пользователей: {db.count_users()} · ответов: {db.count_answers()}"
-    )
 
 
 @dp.message(Command("check"))
@@ -1443,8 +1357,6 @@ async def main():
         BotCommand(command="grant", description="➕ Выдать доступ по ID"),
         BotCommand(command="settings", description="⚙️ Настройки оплаты"),
         BotCommand(command="stars", description="⭐ Операции в звёздах"),
-        BotCommand(command="backup", description="💾 Скачать базу"),
-        BotCommand(command="restore", description="♻️ Восстановить базу из файла"),
         BotCommand(command="id", description="🆔 Мой ID"),
     ]
     await bot.set_my_commands(public_commands)
