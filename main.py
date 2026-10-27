@@ -15,6 +15,7 @@ from aiogram.types import (
     BotCommand,
     BotCommandScopeChat,
     CallbackQuery,
+    ErrorEvent,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     LabeledPrice,
@@ -114,8 +115,11 @@ def is_admin(user_id: int) -> bool:
 def allowed(user_id: int) -> bool:
     if is_admin(user_id):
         return True
-    if db.is_banned(user_id):
-        return False
+    try:
+        if db.is_banned(user_id):
+            return False
+    except Exception:
+        log.exception("ban check failed")
     return not ALLOWED_IDS or user_id in ALLOWED_IDS
 
 
@@ -1409,6 +1413,20 @@ async def on_successful_payment(message: Message):
         f"Все вопросы программы и проверка ответов теперь доступны.",
         reply_markup=menu(uid),
     )
+
+
+@dp.errors()
+async def on_error(event: ErrorEvent):
+    log.error("handler error: %s", event.exception, exc_info=event.exception)
+    msg = event.update.message
+    if msg is not None:
+        try:
+            await msg.answer(
+                "Ошибка при обработке. Попробуйте ещё раз или напишите @exam_admin."
+            )
+        except Exception:
+            pass
+    return True
 
 
 async def main():
