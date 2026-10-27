@@ -1,27 +1,24 @@
-import sqlite3
 import time
 from contextlib import contextmanager
 from datetime import datetime
 from typing import List, Dict, Optional
 
-from config import DATABASE_URL, DB_PATH
+import psycopg
+from psycopg_pool import ConnectionPool
 
-USE_PG = bool(DATABASE_URL)
+from config import DATABASE_URL
 
-if USE_PG:
-    try:
-        import psycopg
-        from psycopg_pool import ConnectionPool
-    except ImportError as e:  # pragma: no cover
-        raise RuntimeError(
-            "Для внешней базы установите psycopg[binary] и psycopg_pool"
-        ) from e
+if not DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL не задан. Бот работает только с внешней Postgres — "
+        "укажите строку подключения в переменных окружения."
+    )
 
-    _pool: "ConnectionPool | None" = None
+_pool: "ConnectionPool | None" = None
 
 
-class _PGProxy:
-    """Прокси соединения: переводит ? на %s, чтобы остальной код не менялся."""
+class _Proxy:
+    """Переводит ? на %s, чтобы SQL оставался компактным."""
 
     def __init__(self, conn):
         self._conn = conn
@@ -32,83 +29,13 @@ class _PGProxy:
 
 @contextmanager
 def _conn():
-    if USE_PG:
-        if _pool is None:
-            raise RuntimeError("База не инициализирована: вызовите db.init()")
-        with _pool.connection() as conn:
-            yield _PGProxy(conn)
-    else:
-        conn = sqlite3.connect(DB_PATH)
-        try:
-            yield conn
-            conn.commit()
-        finally:
-            conn.close()
+    if _pool is None:
+        raise RuntimeError("База не инициализирована: вызовите db.init()")
+    with _pool.connection() as conn:
+        yield _Proxy(conn)
 
 
-def _init_sqlite():
-    with _conn() as c:
-        c.execute(
-            """CREATE TABLE IF NOT EXISTS users (
-                   user_id INTEGER PRIMARY KEY,
-                   mode TEXT NOT NULL DEFAULT 'idle',
-                   q_index INTEGER,
-                   updated_at TEXT
-               )"""
-        )
-        c.execute(
-            """CREATE TABLE IF NOT EXISTS history (
-                   id INTEGER PRIMARY KEY AUTOINCREMENT,
-                   user_id INTEGER NOT NULL,
-                   role TEXT NOT NULL,
-                   content TEXT NOT NULL,
-                   ts TEXT NOT NULL
-               )"""
-        )
-        c.execute("CREATE INDEX IF NOT EXISTS idx_hist_user ON history(user_id)")
-        c.execute(
-            """CREATE TABLE IF NOT EXISTS answers (
-                   id INTEGER PRIMARY KEY AUTOINCREMENT,
-                   user_id INTEGER NOT NULL,
-                   username TEXT,
-                   first_name TEXT,
-                   q_index INTEGER,
-                   question TEXT,
-                   score INTEGER,
-                   ts TEXT NOT NULL
-               )"""
-        )
-        c.execute("CREATE INDEX IF NOT EXISTS idx_answers_user ON answers(user_id)")
-        c.execute(
-            """CREATE TABLE IF NOT EXISTS payments (
-                   id INTEGER PRIMARY KEY AUTOINCREMENT,
-                   user_id INTEGER NOT NULL,
-                   charge_id TEXT,
-                   amount INTEGER,
-                   currency TEXT,
-                   is_recurring INTEGER,
-                   until_ts INTEGER,
-                   ts TEXT NOT NULL
-               )"""
-        )
-        c.execute(
-            """CREATE TABLE IF NOT EXISTS settings (
-                   key TEXT PRIMARY KEY,
-                   value TEXT
-               )"""
-        )
-        cols = {r[1] for r in c.execute("PRAGMA table_info(users)").fetchall()}
-        if "demo_used" not in cols:
-            c.execute("ALTER TABLE users ADD COLUMN demo_used INTEGER NOT NULL DEFAULT 0")
-        if "paid_until" not in cols:
-            c.execute("ALTER TABLE users ADD COLUMN paid_until INTEGER")
-        if "granted" not in cols:
-            c.execute("ALTER TABLE users ADD COLUMN granted INTEGER NOT NULL DEFAULT 0")
-        if "banned" not in cols:
-            c.execute("ALTER TABLE users ADD COLUMN banned INTEGER NOT NULL DEFAULT 0")
-
-
-def _init_pg():
+def init():
     global _pool
     url = DATABASE_URL
     if url.startswith("postgres://"):
@@ -118,6 +45,7 @@ def _init_pg():
         # PgBouncer в transaction-режиме не дружит с серверными prepared statements
         conn_kwargs["prepare_threshold"] = None
     _pool = ConnectionPool(url, min_size=1, max_size=5, open=True, kwargs=conn_kwargs)
+
     with _pool.connection() as conn:
         conn.execute(
             """CREATE TABLE IF NOT EXISTS users (
@@ -184,13 +112,6 @@ def _init_pg():
             conn.execute("ALTER TABLE users ADD COLUMN granted INTEGER NOT NULL DEFAULT 0")
         if "banned" not in cols:
             conn.execute("ALTER TABLE users ADD COLUMN banned INTEGER NOT NULL DEFAULT 0")
-
-
-def init():
-    if USE_PG:
-        _init_pg()
-    else:
-        _init_sqlite()
 
 
 def get_user(user_id: int) -> Dict:
@@ -318,13 +239,10 @@ def count_answers() -> int:
 def columns(table: str = "users") -> List[str]:
     """Колонки таблицы — для диагностики схемы."""
     with _conn() as c:
-        if USE_PG:
-            rows = c.execute(
-                "SELECT column_name FROM information_schema.columns WHERE table_name=?",
-                (table,),
-            ).fetchall()
-        else:
-            rows = c.execute(f"PRAGMA table_info({table})").fetchall()
+        rows = c.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name=?",
+            (table,),
+        ).fetchall()
     return [r[0] for r in rows]
 
 
@@ -364,11 +282,10 @@ def set_banned(user_id: int, banned: bool):
 
 def inc_demo(user_id: int) -> int:
     now = datetime.utcnow().isoformat()
-    col = "users.demo_used" if USE_PG else "demo_used"
     with _conn() as c:
         c.execute(
-            f"""INSERT INTO users(user_id, mode, demo_used, updated_at) VALUES(?,?,?,?)
-               ON CONFLICT(user_id) DO UPDATE SET demo_used={col}+1, updated_at=excluded.updated_at""",
+            """INSERT INTO users(user_id, mode, demo_used, updated_at) VALUES(?,?,?,?)
+               ON CONFLICT(user_id) DO UPDATE SET demo_used=users.demo_used+1, updated_at=excluded.updated_at""",
             (user_id, "idle", 1, now),
         )
         row = c.execute("SELECT demo_used FROM users WHERE user_id=?", (user_id,)).fetchone()

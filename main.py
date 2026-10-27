@@ -31,7 +31,6 @@ from config import (
     BASE_DIR,
     BOT_TOKEN,
     DATA_DIR,
-    DB_PATH,
     DEFAULT_DEMO_LIMIT,
     DEFAULT_PAID_MODE,
     DEFAULT_PRICE_STARS,
@@ -708,33 +707,22 @@ async def cmd_diag(message: Message):
     if not is_admin(uid):
         await message.answer("Команда доступна только администратору.")
         return
-    db_exists = os.path.isfile(DB_PATH)
-    db_size = os.path.getsize(DB_PATH) if db_exists else 0
-    db_in_base = os.path.dirname(os.path.abspath(DB_PATH)) == os.path.abspath(BASE_DIR)
     try:
         cols_line = ", ".join(db.columns("users"))
     except Exception as e:
         cols_line = f"error {e}"
     lines = [
         "🔧 Диагностика базы",
-        f"БД: {'внешняя Postgres' if db.USE_PG else 'локальная SQLite'}",
-        f"BASE_DIR: {BASE_DIR}",
-        f"DATA_DIR: {DATA_DIR}",
-        f"DB: {DB_PATH}" if not db.USE_PG else "DB: DATABASE_URL (внешняя)",
-        f"DB exists: {db_exists} ({db_size} байт)" if not db.USE_PG else "DB: подключение внешнее",
+        "БД: внешняя Postgres",
         f"users cols: {cols_line}",
         f"пользователей: {db.count_users()} · ответов: {db.count_answers()}",
+        f"BASE_DIR: {BASE_DIR}",
+        f"DATA_DIR: {DATA_DIR}",
         f"exists: {os.path.isdir(DATA_DIR)}",
-        f"cwd: {os.getcwd()}",
         f"answers: {kb.answers_path if kb else None}",
         f"questions: {len(kb.questions) if kb else 0}",
         f"chunks: {len(kb.docs) if kb else 0}",
     ]
-    if db_in_base and not db.USE_PG:
-        lines.append(
-            "⚠️ БД лежит в папке бота — при передеплое она может удалиться. "
-            "Задайте DATABASE_URL на внешнюю Postgres."
-        )
     try:
         lines.append("files: " + ", ".join(sorted(os.listdir(DATA_DIR))[:20]))
     except Exception as e:
